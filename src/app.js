@@ -2747,9 +2747,53 @@ class CavemanApp {
     if (this._scrollRenderRaf) return;
     this._scrollRenderRaf = requestAnimationFrame(() => {
       this._scrollRenderRaf = null;
-      this.renderHighlightsImmediate();
       this.updateLineNumbers(false);
+      this.renderVisibleHighlights();
     });
+  }
+
+  renderVisibleHighlights() {
+    if (!this.editorHighlightsEl || !this.cachedHighlightedLines) return;
+    const totalLines = this.cachedHighlightedLines.length;
+    const scrollTop = this.editorEl ? this.editorEl.scrollTop : 0;
+    const clientHeight = this.editorEl ? this.editorEl.clientHeight : 800;
+    const lineTops = this._gutterLineTops;
+    const lineHeights = this._gutterLineHeights;
+    const highlightedLines = this.cachedHighlightedLines;
+
+    if (!lineTops || !lineHeights || lineTops.length !== totalLines + 1) {
+      this.editorHighlightsEl.innerHTML = `<div style="position: relative; height: ${totalLines * 24}px; width: 100%;">${highlightedLines.join('\n')}</div>`;
+      return;
+    }
+
+    let startLine = 0;
+    while (startLine < totalLines - 1 && lineTops[startLine + 1] < scrollTop) {
+      startLine++;
+    }
+    let endLine = startLine;
+    while (endLine < totalLines && lineTops[endLine] < scrollTop + clientHeight) {
+      endLine++;
+    }
+
+    startLine = Math.max(0, startLine - 35);
+    endLine = Math.min(totalLines, endLine + 35);
+
+    if (scrollTop + clientHeight >= (lineTops[totalLines] || 0) - 300 || endLine >= totalLines - 25) {
+      endLine = totalLines;
+      startLine = Math.max(0, Math.min(startLine, totalLines - 80));
+    }
+
+    let rowsHtml = '';
+    for (let i = startLine; i < endLine; i++) {
+      const top = lineTops[i];
+      const h = lineHeights[i];
+      const formatted = highlightedLines[i] || '';
+      rowsHtml += `<div style="position: absolute; top: ${top}px; height: ${h}px; left: 0; right: 0; overflow: hidden; white-space: pre-wrap; word-break: break-all;">${formatted}</div>`;
+    }
+
+    const totalHeight = this._gutterTotalHeight || (lineTops[totalLines] || totalLines * 24);
+    this.editorHighlightsEl.style.paddingTop = '0px';
+    this.editorHighlightsEl.innerHTML = `<div class="editor-highlights-virtual-container" style="position: relative; height: ${totalHeight}px; width: 100%; min-height: 100%;">${rowsHtml}</div>`;
   }
 
   highlightInline(text, inCodeBlock = false, codeBlockLang = '') {
@@ -2777,10 +2821,25 @@ class CavemanApp {
         return Prism.highlight(text, Prism.languages[prismLang], prismLang);
       }
       return this.escapeHtml(text);
-    } else if (typeof Prism !== 'undefined' && Prism.languages.markdown) {
-      return Prism.highlight(text, Prism.languages.markdown, 'markdown');
     } else {
-      return this.escapeHtml(text);
+      // FAST INLINE MARKDOWN HIGHLIGHTER (Zero lag for tables, inline code backticks, and markdown lines)
+      let escaped = this.escapeHtml(text);
+
+      if (/^#{1,6}\s/.test(text)) {
+        return `<span class="token title">${escaped}</span>`;
+      }
+      if (/^>\s/.test(text)) {
+        return `<span class="token comment">${escaped}</span>`;
+      }
+
+      // Inline code backticks
+      escaped = escaped.replace(/(`[^`]+`)/g, '<span class="token string">$1</span>');
+      // Wikilinks
+      escaped = escaped.replace(/(\[\[.*?\]\])/g, '<span class="token wikilink">$1</span>');
+      // Bold
+      escaped = escaped.replace(/(\*\*.*?\*\*)/g, '<span class="token bold">$1</span>');
+
+      return escaped;
     }
   }
 
@@ -2962,7 +3021,7 @@ class CavemanApp {
           this._fastHighlightRaf = requestAnimationFrame(() => {
             this._fastHighlightRaf = null;
             if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-              this.editorHighlightsEl.innerHTML = this.cachedHighlightedLines.join('\n') + '\n';
+              this.renderVisibleHighlights();
             }
           });
         }
@@ -3015,7 +3074,7 @@ class CavemanApp {
         this._fastHighlightRaf = requestAnimationFrame(() => {
           this._fastHighlightRaf = null;
           if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-            this.editorHighlightsEl.innerHTML = this.cachedHighlightedLines.join('\n') + '\n';
+            this.renderVisibleHighlights();
           }
         });
       }
@@ -3067,7 +3126,7 @@ class CavemanApp {
         this._fastHighlightRaf = requestAnimationFrame(() => {
           this._fastHighlightRaf = null;
           if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-            this.editorHighlightsEl.innerHTML = this.cachedHighlightedLines.join('\n') + '\n';
+            this.renderVisibleHighlights();
           }
         });
       }
@@ -3393,11 +3452,13 @@ class CavemanApp {
         }
       }
 
-      this.editorHighlightsEl.innerHTML = highlightedLines.join('\n') + '\n';
       this.cachedLines = rawLines.slice();
       this.cachedHighlightedLines = highlightedLines.slice();
       this.cachedCodeBlockStates = codeBlockStates;
       this.cachedCodeBlockLangs = codeBlockLangs;
+
+      this.updateLineNumbers(false);
+      this.renderVisibleHighlights();
 
       if (this.editorColorWidgets) {
         this.editorColorWidgets.innerHTML = '';
