@@ -1597,7 +1597,21 @@ class CavemanApp {
       const res = this.reconcileSketchSpacers(noteContent, -1);
       noteContent = res.text;
     }
-    this.editorEl.value = noteContent;
+
+    // Lazy loading for large files (150k+ chars / thousands of lines)
+    const linesArr = noteContent.split('\n');
+    if (linesArr.length > 1000) {
+      this.editorEl.value = linesArr.slice(0, 1000).join('\n');
+      setTimeout(() => {
+        if (this.currentNote === note) {
+          this.editorEl.value = noteContent;
+          this.renderHighlights();
+          this.updateLineNumbers(true);
+        }
+      }, 50);
+    } else {
+      this.editorEl.value = noteContent;
+    }
     
     this.editorFoldMap.clear();
     this.foldIdCounter = 1;
@@ -2755,7 +2769,7 @@ class CavemanApp {
   renderVisibleHighlights() {
     if (!this.editorHighlightsEl || !this.cachedHighlightedLines) return;
     const totalLines = this.cachedHighlightedLines.length;
-    const scrollTop = this.editorEl ? this.editorEl.scrollTop : 0;
+    const scrollTop = this.editorEl ? Math.max(0, this.editorEl.scrollTop) : 0;
     const clientHeight = this.editorEl ? this.editorEl.clientHeight : 800;
     const lineTops = this._gutterLineTops;
     const lineHeights = this._gutterLineHeights;
@@ -2767,8 +2781,10 @@ class CavemanApp {
     }
 
     let startLine = 0;
-    while (startLine < totalLines - 1 && lineTops[startLine + 1] < scrollTop) {
-      startLine++;
+    if (scrollTop > 0) {
+      while (startLine < totalLines - 1 && lineTops[startLine + 1] < scrollTop) {
+        startLine++;
+      }
     }
     let endLine = startLine;
     while (endLine < totalLines && lineTops[endLine] < scrollTop + clientHeight) {
@@ -2821,25 +2837,10 @@ class CavemanApp {
         return Prism.highlight(text, Prism.languages[prismLang], prismLang);
       }
       return this.escapeHtml(text);
+    } else if (typeof Prism !== 'undefined' && Prism.languages.markdown) {
+      return Prism.highlight(text, Prism.languages.markdown, 'markdown');
     } else {
-      // FAST INLINE MARKDOWN HIGHLIGHTER (Zero lag for tables, inline code backticks, and markdown lines)
-      let escaped = this.escapeHtml(text);
-
-      if (/^#{1,6}\s/.test(text)) {
-        return `<span class="token title">${escaped}</span>`;
-      }
-      if (/^>\s/.test(text)) {
-        return `<span class="token comment">${escaped}</span>`;
-      }
-
-      // Inline code backticks
-      escaped = escaped.replace(/(`[^`]+`)/g, '<span class="token string">$1</span>');
-      // Wikilinks
-      escaped = escaped.replace(/(\[\[.*?\]\])/g, '<span class="token wikilink">$1</span>');
-      // Bold
-      escaped = escaped.replace(/(\*\*.*?\*\*)/g, '<span class="token bold">$1</span>');
-
-      return escaped;
+      return this.escapeHtml(text);
     }
   }
 
