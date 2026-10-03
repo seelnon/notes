@@ -118,9 +118,27 @@ body.night-mode .button:hover {
   color: #241f1a;
 }
 
+body.night-mode #preview h1,
+body.night-mode #preview h2,
+body.night-mode #preview h3,
+body.night-mode #preview h4,
+body.night-mode #preview h5,
+body.night-mode #preview h6 {
+  border-bottom: none !important;
+  text-decoration: none !important;
+}
+
 body.night-mode #preview h2 {
-  border-bottom-color: #5a4b3a;
   color: #bdab84;
+}
+
+body.night-mode #preview h1.has-liner,
+body.night-mode #preview h2.has-liner,
+body.night-mode #preview h3.has-liner,
+body.night-mode #preview h4.has-liner,
+body.night-mode #preview h5.has-liner,
+body.night-mode #preview h6.has-liner {
+  border-bottom: 1px solid #5a4b3a !important;
 }
 
 body.night-mode #preview blockquote {

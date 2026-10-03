@@ -195,7 +195,7 @@ export class WasmEngine {
       // 1. Try streaming from static asset
       if (typeof fetch !== "undefined") {
         try {
-          const resp = await fetch("/wasm/engine.wasm");
+          const resp = await fetch("./src/wasm/engine.wasm");
           if (resp.ok) {
             const { instance } = await (WebAssembly.instantiateStreaming 
               ? WebAssembly.instantiateStreaming(resp) 

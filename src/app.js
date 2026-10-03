@@ -263,11 +263,11 @@ class CavemanApp {
       let text = this.editorEl.value;
       let cursor = this.editorEl.selectionStart;
 
-      // Auto-plant any standalone [sketch ...] tag that has no closing [/sketch]
-      const planted = this.autoPlantSketch(text, cursor);
-      if (planted.modified) {
-        text = planted.text;
-        cursor = planted.cursor;
+      // Reconcile sketch blocks like flexbox (adjust heights, expand/collapse spacers, clean orphans)
+      const reconciled = this.reconcileSketchSpacers(text, cursor);
+      if (reconciled.modified) {
+        text = reconciled.text;
+        cursor = reconciled.cursor;
         this.editorEl.value = text;
         this.editorEl.setSelectionRange(cursor, cursor);
       }
@@ -649,25 +649,58 @@ class CavemanApp {
           e.preventDefault();
           this.pushHistory();
 
-          let sketchId = parsed.id;
-          if (!sketchId) {
-            sketchId = 'sk-' + Math.random().toString(36).substring(2, 8);
+          // If cursor is at the beginning of the sketch tag line: insert 1 line ABOVE the sketch
+          if (selStart === lineStart) {
+            const newText = text.slice(0, lineStart) + '\n' + text.slice(lineStart);
+            this.editorEl.value = newText;
+            this.editorEl.setSelectionRange(lineStart, lineStart);
+            this.cachedLines = null;
+            this.cachedHighlightedLines = null;
+            this.lastRenderedText = null;
+            this._gutterLines = null;
+            this.editorEl.dispatchEvent(new Event('input', { bubbles: true }));
+            this.renderHighlightsImmediate();
+            this.updateLineNumbers(true);
+            return;
           }
-          const sketchW = parsed.width || 300;
-          const sketchH = parsed.height || 300;
-          const blankLinesCount = this.getSketchSpacerCount(sketchH);
-          const blankLines = '\n'.repeat(blankLinesCount);
 
-          const updatedTag = `[sketch:${sketchId} ${sketchW} ${sketchH}]`;
-          const replacement = `${updatedTag}\n${blankLines}`;
+          // Otherwise, user is on the sketch tag line (at end or within):
+          // Insert EXACTLY ONE new line BELOW the sketch widget and its spacer block (at Line 6)!
+          const neededSpacers = this.getSketchSpacerCount(parsed.height);
+          const lines = text.split('\n');
+          const currentLineIdx = text.slice(0, lineStart).split('\n').length - 1;
 
-          const newText = text.slice(0, lineStart) + replacement + text.slice(actualLineEnd + (text[actualLineEnd] === '\n' ? 1 : 0));
+          // Count existing spacer lines directly following the sketch tag
+          let existingSpacers = 0;
+          while (currentLineIdx + 1 + existingSpacers < lines.length &&
+                 existingSpacers < neededSpacers &&
+                 lines[currentLineIdx + 1 + existingSpacers].trim() === '') {
+            existingSpacers++;
+          }
+
+          const missingSpacers = neededSpacers - existingSpacers;
+          const insertLineIdx = currentLineIdx + 1 + existingSpacers;
+
+          let insertOffset = 0;
+          for (let i = 0; i < Math.min(insertLineIdx, lines.length); i++) {
+            insertOffset += lines[i].length + 1;
+          }
+
+          // Insert missing spacers (if any) PLUS the 1 new empty line directly below the sketch!
+          const newText = text.slice(0, insertOffset) + '\n'.repeat(missingSpacers + 1) + text.slice(insertOffset);
           this.editorEl.value = newText;
 
-          const cursorAfter = lineStart + replacement.length;
-          this.editorEl.setSelectionRange(cursorAfter, cursorAfter);
+          // Cursor lands on the injected empty line directly below the sketch
+          const targetCursor = insertOffset + missingSpacers;
+          this.editorEl.setSelectionRange(targetCursor, targetCursor);
 
-          this.handleInput();
+          this.cachedLines = null;
+          this.cachedHighlightedLines = null;
+          this.lastRenderedText = null;
+          this._gutterLines = null;
+
+          // Dispatch input event so all subsystems (highlights, state, gutter, sketch widgets) update synchronously!
+          this.editorEl.dispatchEvent(new Event('input', { bubbles: true }));
           this.renderHighlightsImmediate();
           this.updateLineNumbers(true);
           return;
@@ -681,10 +714,18 @@ class CavemanApp {
       this.handlePaste(e);
       // Ensure post-paste text is rendered cleanly and recorded
       setTimeout(() => {
+        const text = this.editorEl.value;
+        const cursor = this.editorEl.selectionStart;
+        const res = this.reconcileSketchSpacers(text, cursor);
+        if (res.modified) {
+          this.editorEl.value = res.text;
+          this.editorEl.setSelectionRange(res.cursor, res.cursor);
+        }
         this.pushHistory();
         this.cachedLines = null;
         this.cachedHighlightedLines = null;
         this.lastRenderedText = null;
+        this._gutterLines = null;
         this.renderHighlightsImmediate();
         this.updateLineNumbers(true);
       }, 0);
@@ -926,18 +967,19 @@ class CavemanApp {
 
   async loadPublicNotes() {
     try {
-      const response = await fetch('./server/server.json');
+      const response = await fetch(`./server/server.json?_t=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) return;
       const data = await response.json();
       this.publicNotes = [];
       
       for (const p of data.public_notes) {
-        const md = await fetch(`./server/${p.file}`);
+        const md = await fetch(`./server/${p.file}?_t=${Date.now()}`, { cache: 'no-store' });
         const content = await md.text();
         this.publicNotes.push({
           ...p,
           id: `public:${p.file}`,
           content,
+          rawContent: content,
           updatedAt: Date.now(),
           isPublic: true
         });
@@ -1140,6 +1182,7 @@ class CavemanApp {
   }
 
   async loadNotes() {
+    await this.loadPublicNotes();
     const localNotes = await this.vault.getNotes();
     const publicNotes = this.publicNotes || [];
     
@@ -1532,13 +1575,27 @@ class CavemanApp {
       this.sketchManager.bakeAll();
       this.sketchManager.clearWidgets();
     }
+    if (note.isPublic && note.file) {
+      try {
+        const res = await fetch(`./server/${note.file}?_t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) {
+          const fresh = await res.text();
+          note.content = fresh;
+          note.rawContent = fresh;
+        }
+      } catch (err) {
+        console.warn("Could not fetch fresh public note:", err);
+      }
+    }
     this.currentNote = note;
     this.titleInput.value = note.title;
     document.title = note.title ? `${note.title} - Fri-ren Notes` : 'Fri-ren Notes';
     this.folderInput.value = note.folder || '';
+    if (this._lastKnownSketches) this._lastKnownSketches.clear();
     let noteContent = note.rawContent || note.content || '';
-    if (this.expandSketchSpacers) {
-      noteContent = this.expandSketchSpacers(noteContent);
+    if (this.reconcileSketchSpacers) {
+      const res = this.reconcileSketchSpacers(noteContent, -1);
+      noteContent = res.text;
     }
     this.editorEl.value = noteContent;
     
@@ -1967,27 +2024,7 @@ class CavemanApp {
 
   expandSketchSpacers(text) {
     if (!text || !text.includes('[sketch')) return text;
-    const lines = text.split('\n');
-    const out = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      out.push(line);
-      const parsed = this.sketchManager ? this.sketchManager.parseSketchTag(line) : null;
-      if (parsed) {
-        const h = parsed.height || 300;
-        const neededSpacers = this.getSketchSpacerCount(h);
-        
-        let existingBlanks = 0;
-        while (i + 1 + existingBlanks < lines.length && lines[i + 1 + existingBlanks].trim() === '') {
-          existingBlanks++;
-        }
-        const toAdd = Math.max(0, neededSpacers - existingBlanks);
-        for (let k = 0; k < toAdd; k++) {
-          out.push('');
-        }
-      }
-    }
-    return out.join('\n');
+    return this.reconcileSketchSpacers(text, -1).text;
   }
 
   updateStats() {
@@ -2849,6 +2886,12 @@ class CavemanApp {
       lineHtml = lineHtml.replace(/<span class="token comment">&lt;!--\s*FOLD:.*?\s*--&gt;<\/span>/gi, match => `<span class="editor-fold-marker">${match}</span>`);
       lineHtml = lineHtml.replace(/&lt;!--\s*FOLD:.*?\s*--&gt;/gi, match => `<span class="editor-fold-marker">${match}</span>`);
       lineHtml = lineHtml.replace(/<!--\s*FOLD:.*?\s*-->/gi, match => `<span class="editor-fold-marker">${this.escapeHtml(match)}</span>`);
+    }
+
+    // Size tags & Liner tags highlight in editor
+    if (lineHtml.includes('size') || lineHtml.includes('liner') || lineHtml.includes('[line]')) {
+      lineHtml = lineHtml.replace(/(\[size\s*=\s*['"]?[0-9a-zA-Z.%]+['"]?\]|\[\/size\])/gi, '<span class="token tag editor-size-tag">$1</span>');
+      lineHtml = lineHtml.replace(/(\[(?:liner|line|divider)\])/gi, '<span class="token tag editor-size-tag">$1</span>');
     }
 
     return lineHtml;
@@ -3917,61 +3960,164 @@ class CavemanApp {
   }
 
   autoPlantSketch(text, cursorPos = -1) {
-    if (!text || !text.includes('[sketch')) return { modified: false, text, cursor: cursorPos };
+    return this.reconcileSketchSpacers(text, cursorPos);
+  }
 
-    const lines = text.split('\n');
+  /**
+   * Unified Flex Sketch Reconciler (Feature Request: Robust 'flex' behavior)
+   * Enforces the universal invariant:
+   * 1. Every [sketch:id w h] tag is followed by EXACTLY getSketchSpacerCount(h) blank lines.
+   * 2. If a sketch is removed/cut, its orphaned spacer lines collapse immediately.
+   * 3. If a sketch is pasted/added, required spacer lines are extended immediately.
+   * 4. If a sketch's height changes (e.g. 500 -> 300 or 300 -> 600), spacer lines expand/contract to fit without gaps or overlap.
+   * 5. Preserves cursor position seamlessly.
+   */
+  reconcileSketchSpacers(text, cursorPos = -1) {
+    if (!text || typeof text !== 'string') {
+      if (this._lastKnownSketches) this._lastKnownSketches.clear();
+      return { modified: false, text: text || '', cursor: cursorPos };
+    }
+
+    if (!this._lastKnownSketches) {
+      this._lastKnownSketches = new Map(); // id -> { id, height, lineIdx, spacerCount }
+    }
+
+    let lines = text.split('\n');
     let modified = false;
-    const newLines = [];
 
+    // Scan all current sketches in document
+    const currentSketches = new Map();
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmed = line.trim();
-
-      // Omit stray [/sketch] closing tags
       if (/^\[\/sketch\]/i.test(trimmed)) {
+        lines.splice(i, 1);
         modified = true;
+        i--;
         continue;
       }
-
-      // Check if line is a standalone [sketch ...] declaration
-      const sketchMatch = trimmed.match(/^\[sketch(?::([a-zA-Z0-9_-]+))?(?:\s+([a-zA-Z0-9_-]+))?(?:\s+(\d+))?(?:\s+(\d+))?(?:\s+([a-zA-Z0-9_-]+))?\]$/i);
-      if (sketchMatch) {
-        const existingId = sketchMatch[1];
-        // If it already has an ID, leave it untouched
-        if (existingId) {
-          newLines.push(line);
-          continue;
-        }
-
-        // New sketch declaration without an ID: plant fresh ID and ensure spacer blank lines follow
-        const parsed = this.sketchManager ? this.sketchManager.parseSketchTag(trimmed) : null;
-        if (parsed) {
+      const parsed = this.sketchManager ? this.sketchManager.parseSketchTag(trimmed) : null;
+      if (parsed) {
+        let id = parsed.id;
+        if (!id) {
+          id = 'sk-' + Math.random().toString(36).substring(2, 8);
+          parsed.id = id;
+          lines[i] = `[sketch:${id} ${parsed.width} ${parsed.height}]`;
           modified = true;
-          const id = 'sk-' + Math.random().toString(36).substring(2, 8);
-          const w = parsed.width || 300;
-          const h = parsed.height || 300;
-          const blankCount = this.getSketchSpacerCount(h);
-
-          newLines.push(`[sketch:${id} ${w} ${h}]`);
-
-          // Check if subsequent lines already have blank lines
-          let existingBlanks = 0;
-          while (i + 1 + existingBlanks < lines.length && lines[i + 1 + existingBlanks].trim() === '') {
-            existingBlanks++;
-          }
-          const toAdd = Math.max(0, blankCount - existingBlanks);
-          for (let k = 0; k < toAdd; k++) {
-            newLines.push('');
-          }
-          continue;
         }
+        const neededSpacers = this.getSketchSpacerCount(parsed.height);
+        currentSketches.set(id, {
+          id,
+          lineIdx: i,
+          width: parsed.width,
+          height: parsed.height,
+          neededSpacers
+        });
       }
-      newLines.push(line);
     }
 
-    if (!modified) return { modified: false, text, cursor: cursorPos };
-    const newText = newLines.join('\n');
-    return { modified: true, text: newText, cursor: cursorPos !== -1 ? Math.min(newText.length, cursorPos) : newText.length };
+    // 1. COLLAPSE ORPHANED SPACERS: If a sketch was deleted / cut, collapse its spacer lines!
+    const removedSketches = [];
+    for (const [id, lastInfo] of this._lastKnownSketches.entries()) {
+      if (!currentSketches.has(id)) {
+        removedSketches.push(lastInfo);
+      }
+    }
+
+    if (removedSketches.length > 0) {
+      // Sort in descending line index so earlier line indices remain valid during splicing
+      removedSketches.sort((a, b) => b.lineIdx - a.lineIdx);
+      for (const info of removedSketches) {
+        const targetLine = Math.min(info.lineIdx, lines.length - 1);
+        if (targetLine >= 0) {
+          let emptyCount = 0;
+          while (targetLine + emptyCount < lines.length && lines[targetLine + emptyCount].trim() === '' && emptyCount < info.spacerCount) {
+            emptyCount++;
+          }
+          if (emptyCount > 0) {
+            let charOffset = 0;
+            for (let k = 0; k < targetLine; k++) charOffset += lines[k].length + 1;
+            
+            lines.splice(targetLine, emptyCount);
+            modified = true;
+            
+            if (cursorPos !== -1 && cursorPos >= charOffset) {
+              cursorPos = Math.max(charOffset, cursorPos - emptyCount);
+            }
+          }
+        }
+      }
+    }
+
+    // 2. RECONCILE SPACERS FOR EVERY CURRENT SKETCH (Delta Flex - preserves user blank lines)
+    const updatedKnownSketches = new Map();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      const parsed = this.sketchManager ? this.sketchManager.parseSketchTag(trimmed) : null;
+      if (parsed) {
+        const id = parsed.id || ('sk-' + Math.random().toString(36).substring(2, 8));
+        const neededSpacers = this.getSketchSpacerCount(parsed.height);
+        const lastInfo = this._lastKnownSketches.get(id);
+
+        // Count actual consecutive blank lines directly below this sketch in lines
+        let currentBlanks = 0;
+        while (i + 1 + currentBlanks < lines.length && lines[i + 1 + currentBlanks].trim() === '') {
+          currentBlanks++;
+        }
+
+        if (currentBlanks < neededSpacers) {
+          // Not enough blank lines! Extend immediately (paste, cut & paste, new sketch, height increase)
+          const toAdd = neededSpacers - currentBlanks;
+          const spliceLine = i + 1 + currentBlanks;
+          let charOffset = 0;
+          for (let k = 0; k < spliceLine; k++) charOffset += lines[k].length + 1;
+          const newSpacers = new Array(toAdd).fill('');
+          lines.splice(spliceLine, 0, ...newSpacers);
+          modified = true;
+          if (cursorPos !== -1 && cursorPos >= charOffset) cursorPos += toAdd;
+          currentBlanks = neededSpacers;
+        } else if (currentBlanks > neededSpacers && lastInfo && lastInfo.height > parsed.height) {
+          // Tag height was explicitly decreased! Collapse excess delta!
+          const prevSpacers = this.getSketchSpacerCount(lastInfo.height);
+          const delta = prevSpacers - neededSpacers;
+          const toRemove = Math.min(delta, currentBlanks - neededSpacers);
+          if (toRemove > 0) {
+            const spliceLine = i + 1 + neededSpacers;
+            let charOffset = 0;
+            for (let k = 0; k < spliceLine; k++) charOffset += lines[k].length + 1;
+            lines.splice(spliceLine, toRemove);
+            modified = true;
+            if (cursorPos !== -1 && cursorPos >= charOffset) {
+              cursorPos = Math.max(charOffset, cursorPos - toRemove);
+            }
+            currentBlanks -= toRemove;
+          }
+        }
+
+        updatedKnownSketches.set(id, {
+          id,
+          lineIdx: i,
+          width: parsed.width,
+          height: parsed.height,
+          spacerCount: neededSpacers
+        });
+        i += neededSpacers;
+      }
+    }
+
+    this._lastKnownSketches = updatedKnownSketches;
+
+    if (!modified) {
+      return { modified: false, text, cursor: cursorPos };
+    }
+
+    const newText = lines.join('\n');
+    let newCursor = cursorPos;
+    if (cursorPos !== -1) {
+      newCursor = Math.min(newText.length, Math.max(0, cursorPos));
+    }
+    return { modified: true, text: newText, cursor: newCursor };
   }
 
   getCleanMarkdown(text) {

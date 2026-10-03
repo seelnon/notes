@@ -16,6 +16,13 @@ Welcome, traveler. This scroll contains the forbidden knowledge of the **Caveman
 *Italicized like the wind.* 
 **Bolded like the mountain.**
 ***Both, like a storm.***
+[u]Underlined only when you ask for it.[/u]
+
+---
+
+## 2.1 TEXT SIZING & COLORS
+[size=12]Small whisper (12px)[/size] • [size=16]Normal speech (16px)[/size] • [size=22]Chieftain roar (22px)![/size]
+[color=#e5c07b]Altus Gold[/color] • [color=#e06c75]Crimson Fire[/color] • [color=#61afef]Magic Blue[/color]
 
 ---
 

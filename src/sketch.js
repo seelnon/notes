@@ -485,6 +485,35 @@ export class SketchWidget {
     this.redrawSVG();
   }
 
+  setHeight(newHeight) {
+    if (this.height === newHeight) return;
+    const editor = this.manager.app.editorEl;
+    if (!editor) return;
+    const text = editor.value;
+    const lines = text.split('\n');
+    let found = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const parsed = this.manager.parseSketchTag(line);
+      if (parsed && parsed.id === this.id) {
+        lines[i] = `[sketch:${this.id} ${this.width} ${newHeight}]`;
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      editor.value = lines.join('\n');
+      const sel = editor.selectionStart;
+      const res = this.manager.app.reconcileSketchSpacers(editor.value, sel);
+      if (res.modified) {
+        editor.value = res.text;
+        editor.setSelectionRange(res.cursor, res.cursor);
+      }
+      this.manager.app.handleInput();
+      this.manager.app.requestFastLineNumbers(true);
+    }
+  }
+
   updateTheme(isNightMode) {
     // Dark background and gold ink remain preserved regardless of overall app theme
     this.redrawSVG();

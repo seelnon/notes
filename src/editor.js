@@ -184,8 +184,42 @@ export class Editor {
       return `<span class="preview-color-line" style="color: ${color} !important;"><span class="preview-color-swatch" style="background-color: ${color};"></span>${content}</span>`;
     });
 
+    // Header explicit liner syntax: # Header [liner] or # Header [line]
+    md = md.replace(/^(#{1,6}\s+[^\n]*?)\s*(?:\[|<)(?:liner|line)(?:\]|>)\s*$/gim, '$1 <!-- HAS_LINER -->');
+
+    // Size Tag Processing in Markdown Preview:
+    // e.g. [size=20]text[/size] or [size=24px]text[/size] or [size=1.5em]text[/size]
+    const parseSizeVal = (raw) => {
+      if (!raw) return '1em';
+      const clean = raw.trim().replace(/^['"]|['"]$/g, '').trim();
+      if (/^\d+(\.\d+)?$/.test(clean)) return `${clean}px`;
+      return clean;
+    };
+
+    // 1. Multi-line or closed size tags: [size=20]...[/size] or <size=20>...</size>
+    md = md.replace(/(?:\[|<)size\s*=\s*['"]?([0-9a-zA-Z.%]+)['"]?\s*(?:\]|>)([\s\S]*?)(?:\[\/size\]|<\/size>)/gi, (match, val, content) => {
+      const sz = parseSizeVal(val);
+      return `<span class="preview-custom-size" style="font-size: ${sz} !important; line-height: inherit; display: inline;">${content}</span>`;
+    });
+
+    // 2. Unclosed single-line size tags: automatically close at the end of the line
+    md = md.replace(/(?:\[|<)size\s*=\s*['"]?([0-9a-zA-Z.%]+)['"]?\s*(?:\]|>)([^\n]*)/gi, (match, val, content) => {
+      const sz = parseSizeVal(val);
+      return `<span class="preview-custom-size" style="font-size: ${sz} !important; line-height: inherit; display: inline;">${content}</span>`;
+    });
+
+    // Underline Tag Processing: [u]...[/u] or [underline]...[/underline] or <u>...</u>
+    md = md.replace(/(?:\[|<)(?:u|underline)(?:\]|>)([\s\S]*?)(?:\[\/(?:u|underline)\]|<\/(?:u|underline)>)/gi, (match, content) => {
+      return `<span class="preview-u" style="text-decoration: underline !important; text-underline-offset: 3px;">${content}</span>`;
+    });
+
+    // Explicit Liner / Line Divider Tag: [line] or [liner] or [divider]
+    md = md.replace(/(?:\[|<)(?:line|liner|divider)(?:\]|>)/gi, '<hr class="preview-liner" />');
+
     // 3. Remove stray closing tags if any remain
     md = md.replace(/(?:\[\/color\]|<\/color>)/gi, '');
+    md = md.replace(/(?:\[\/size\]|<\/size>)/gi, '');
+    md = md.replace(/(?:\[\/(?:u|underline)\]|<\/(?:u|underline)>)/gi, '');
     md = md.replace(/\[\/sketch\]/gi, '');
 
     // Extract and hide sketch blocks before Marked parses
@@ -320,6 +354,16 @@ export class Editor {
       
       // Video stability hack: also add no-referrer to videos
       html = html.replace(/<video /g, '<video referrerpolicy="no-referrer" ');
+
+      // Replace headings marked with <!-- HAS_LINER -->
+      html = html.replace(/<h([1-6])([^>]*)>([\s\S]*?)<!-- HAS_LINER -->\s*<\/h\1>/gi, (match, level, attrs, text) => {
+        if (/class=["']/i.test(attrs)) {
+          attrs = attrs.replace(/class=["']([^"']*)["']/i, 'class="$1 has-liner"');
+        } else {
+          attrs = `${attrs} class="has-liner"`;
+        }
+        return `<h${level}${attrs}>${text.trim()}</h${level}>`;
+      });
 
       // Wikilink Detection [[Note Title]]
       html = html.replace(/\[\[(.*?)\]\]/g, (match, target) => {
