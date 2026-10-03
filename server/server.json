@@ -1,0 +1,16 @@
+{
+  "public_notes": [
+    {
+      "id": "tutorial",
+      "title": "TUTORIAL_SCROLL",
+      "folder": "ANCIENT_KNOWLEDGE",
+      "file": "tutorial.md"
+    },
+    {
+      "id": "editor_guide",
+      "title": "INTERFACE_SCROLL",
+      "folder": "ANCIENT_KNOWLEDGE",
+      "file": "editor_guide.md"
+    }
+  ]
+}

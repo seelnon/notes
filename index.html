@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Fri-ren Notes</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./src/style.css" />
+    <link rel="stylesheet" href="./src/night-mode.css" />
+    <!-- Marked library for markdown parsing -->
+    <script src="./lib/marked.min.js"></script>
+    <!-- KaTeX for math rendering -->
+    <link rel="stylesheet" href="./lib/katex.min.css" />
+    <script src="./lib/katex.min.js"></script>
+    <!-- PrismJS for syntax highlighting -->
+    <link rel="stylesheet" href="./lib/prism.min.css" id="prism-theme" />
+    <script src="./lib/prism.min.js"></script>
+    <script src="./lib/prism-json.min.js"></script>
+    <script src="./lib/prism-javascript.min.js"></script>
+    <script src="./lib/prism-python.min.js"></script>
+    <script src="./lib/prism-css.min.js"></script>
+    <script src="./lib/prism-markdown.min.js"></script>
+    <script src="./lib/prism-diff.min.js"></script>
+    <script src="./lib/prism-lua.min.js"></script>
+    <!-- JSZip library for vault export/import -->
+    <script src="./lib/jszip.min.js"></script>
+  </head>
+  <body>
+    <div id="app" class="high-density-frame">
+      <!-- Top Navigation Bar -->
+      <header id="top-bar">
+        <div class="brand">
+          <div class="dot"></div>
+          <span class="brand-text">FRI-REN NOTES</span>
+        </div>
+        <nav class="top-nav">
+          <span id="view-btn">Settings</span>
+          <span id="graph-btn">Graph</span>
+          <span id="db-btn">Database</span>
+        </nav>
+        <div class="header-actions">
+          <div id="theme-control" class="theme-switch" title="Toggle Bonfire">
+            <span class="icon">☼</span>
+            <div class="switch-track">
+              <div class="switch-knob"></div>
+            </div>
+            <span class="icon">☾</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="main-layout">
+        <aside id="sidebar">
+          <div class="sidebar-search">
+            <input type="text" id="search-notes" placeholder="SEARCH NOTES..." />
+          </div>
+          <div id="note-list"></div>
+          <div class="sidebar-footer">
+            <button id="new-note" title="New Note">+ New Document</button>
+          </div>
+        </aside>
+        
+        <main id="editor-container">
+          <div id="toolbar">
+            <div class="note-status">
+              <input type="text" id="note-folder" placeholder="folder/" />
+              <div id="status-resizer" class="resizer-v"></div>
+              <input type="text" id="note-title" placeholder="Untitled Note" />
+            </div>
+            <div class="toolbar-actions">
+              <button id="toggle-preview" title="Toggle Preview">View</button>
+              <button id="canvas-mode-btn" title="Toggle Canvas">Canvas</button>
+              <button id="delete-note" title="Delete Note">Delete</button>
+              <button id="download-pdf-btn" title="Download as PDF">↓</button>
+            </div>
+          </div>
+          <div class="split-view">
+            <div id="editor-wrapper">
+              <div id="line-numbers"></div>
+              <div id="editor-highlights"></div>
+              <div id="search-marks"></div>
+              <div id="editor-color-widgets"></div>
+              <div id="editor-sketch-widgets"></div>
+              <textarea id="editor" spellcheck="true" placeholder="Write your markdown here... (Paste images with Ctrl+V)"></textarea>
+              <div id="editor-search-widget" class="hidden">
+                <div class="search-main">
+                  <input type="text" id="editor-search-input" placeholder="Find..." />
+                  <span id="editor-search-results">0/0</span>
+                  <button id="editor-search-prev" style="height: 20px; width: 24px; padding: 0;">↑</button>
+                  <button id="editor-search-next" style="height: 20px; width: 24px; padding: 0;">↓</button>
+                  <button id="editor-search-close" style="height: 20px; width: 24px; padding: 0;">×</button>
+                </div>
+              </div>
+            </div>
+            <div id="preview" class="hidden"></div>
+            <div id="canvas-panel" class="hidden">
+              <div class="canvas-panel-header">
+                <div class="brand">
+                  <div class="dot"></div>
+                  <span class="brand-text">CANVAS LITE <small style="font-size: 8px; opacity: 0.5;">(v0.1)</small></span>
+                </div>
+                <div class="canvas-controls">
+                  <div id="canvas-palette" class="canvas-palette" style="display: flex; gap: 4px; align-items: center; margin-right: 12px;"></div>
+                  <button id="canvas-add-box" title="Add new box">+ BOX</button>
+                  <button id="canvas-add-image" title="Add image">+ IMAGE</button>
+                </div>
+              </div>
+              <div id="canvas-lite-root" style="flex: 1; width: 100%; position: relative; overflow: hidden;">
+                <!-- Canvas UI elements like editor/toolbar go here -->
+                <canvas id="canvas-lite"></canvas>
+                <div id="canvas-peeks-layer">
+                  <div id="canvas-inline-editor" class="hidden">
+                    <div style="display: flex; gap: 4px; width: 100%; box-sizing: border-box;">
+                      <input type="text" id="canvas-box-emoji" placeholder="Emoji" style="width: 50px; font-size: 11px;">
+                      <input type="text" id="canvas-box-title" placeholder="Card Title" style="flex: 1; font-size: 11px;">
+                    </div>
+                    <textarea id="canvas-box-input" placeholder="Name"></textarea>
+                    <input type="text" id="canvas-box-link" placeholder="[[Note Link]]">
+                  </div>
+                  <div id="canvas-toolbar" class="hidden">
+                    <button id="toolbar-delete" title="Delete">🗑</button>
+                    <button id="toolbar-rename" title="Edit">✎</button>
+                    <button id="toolbar-peek" title="Peek Link">👁</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <!-- Modals / Overlays -->
+      <div id="graph-menu" class="overlay hidden">
+        <div class="overlay-full">
+          <div class="graph-header">
+            <h3>LOCAL GRAPH OVERVIEW</h3>
+            <span class="hint">Click nodes to navigate • Mouse moves create ripples</span>
+            <button class="close-overlay">CLOSE [ESC]</button>
+          </div>
+          <div id="graph-container">
+            <pre id="graph-water" aria-hidden="true"></pre>
+            <canvas id="graph-canvas"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-menu" class="overlay hidden">
+        <div class="overlay-content">
+          <h3>VIEW SETTINGS</h3>
+          <div class="control-group">
+            <label>FONT SIZE</label>
+            <div class="btn-row">
+              <button class="zoom-btn" data-size="12">Small</button>
+              <button class="zoom-btn active" data-size="14">Default</button>
+              <button class="zoom-btn" data-size="18">Large</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <label>INTERFACE</label>
+            <button id="toggle-sidebar-btn">Toggle Sidebar (Ctrl+[)</button>
+            <label class="checkbox-container" style="margin-top: 10px;">
+              <input type="checkbox" id="show-editor-highlights-check" checked />
+              <span>Show Syntax Highlights</span>
+            </label>
+          </div>
+          <div class="control-group">
+            <label>ENGINE & PERFORMANCE</label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="native-engine-check" checked />
+              <span>Fast Incremental Engine (C++ / WASM acceleration)</span>
+            </label>
+          </div>
+          <div class="control-group">
+            <label>PRINT OPTIONS</label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="print-background-check" />
+              <span>Full Background PDF </span>
+            </label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="print-continuous-check" />
+              <span>Continuous Flow</span>
+            </label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="dbl-click-rename-check" checked />
+              <span>Double Click Renaming</span>
+            </label>
+          </div>
+          <div class="control-group">
+            <label>TINT PALETTE (CLICK TO EDIT)</label>
+            <div id="settings-palette-grid" class="color-grid"></div>
+          </div>
+          <button class="close-overlay">CLOSE</button>
+        </div>
+      </div>
+
+      <div id="db-menu" class="overlay hidden">
+        <div class="overlay-content">
+          <h3>VAULT REGISTRY</h3>
+          <div class="db-stats">
+            <div class="stat-row"><span>Total Notes:</span> <span id="stat-count">0</span></div>
+            <div class="stat-row"><span>Storage Used:</span> <span id="stat-size">0 KB</span></div>
+            <div class="stat-row"><span>Images Cached:</span> <span id="stat-imgs">0</span></div>
+            <button id="purge-images-btn" style="width: 100%; margin-top: 16px;">Purge Unused Images</button>
+          </div>
+          <div class="control-group">
+            <label>MAINTENANCE</label>
+            <div class="btn-row">
+              <button id="export-btn" title="Full Vault Export (Images included)">⬇︎ EXPORT VAULT</button>
+              <label for="import-vault" class="button">↑ IMPORT VAULT</label>
+            </div>
+          </div>
+          <div class="danger-zone">
+            <label>DANGER ZONE</label>
+            <button id="purge-vault-btn">PURGE ENTIRE VAULT</button>
+          </div>
+          <button class="close-overlay">CLOSE</button>
+        </div>
+      </div>
+
+      <!-- Footer Status Bar -->
+      <footer id="status-bar">
+        <div class="status-left">
+          <span id="char-count">Chars: 0</span>
+          <span>Format: UTF-8</span>
+        </div>
+        <div class="status-right">
+          <span class="sync-status">
+            <span class="indicator"></span>
+            Local Vault Linked
+          </span>
+          <span id="last-saved" class="opacity-60">Ready</span>
+        </div>
+      </footer>
+      
+      <input type="file" id="import-vault" accept=".json,.zip" style="display:none" />
+    </div>
+
+    <script type="module" src="./src/canvas.js"></script>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
