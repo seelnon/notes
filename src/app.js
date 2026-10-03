@@ -1601,6 +1601,16 @@ class CavemanApp {
     
     this.editorFoldMap.clear();
     this.foldIdCounter = 1;
+
+    if (note.foldMap && typeof note.foldMap === 'object') {
+      for (const [k, v] of Object.entries(note.foldMap)) {
+        this.editorFoldMap.set(k, v);
+      }
+    } else if (note.folds && typeof note.folds === 'object') {
+      for (const [k, v] of Object.entries(note.folds)) {
+        this.editorFoldMap.set(k, v);
+      }
+    }
     
     // Auto-restore folded headings
     try {
@@ -1787,6 +1797,7 @@ class CavemanApp {
         folder: this.folderInput.value,
         content: newContent,
         rawContent: rawContent,
+        foldMap: Object.fromEntries(this.editorFoldMap),
         canvasData: this.currentNote.canvasData,
         createdAt: Date.now(),
         updatedAt: Date.now()
@@ -1804,6 +1815,7 @@ class CavemanApp {
     this.currentNote.title = newTitle;
     this.currentNote.folder = newFolder;
     this.currentNote.rawContent = rawContent;
+    this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
     this.currentNote.updatedAt = Date.now();
     
     this.saveFoldedHeadingsState();
@@ -1814,6 +1826,7 @@ class CavemanApp {
       clearTimeout(this.saveTimeout);
       const newContent = this.getCleanMarkdown(rawContent);
       this.currentNote.content = newContent;
+      this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
       this.currentNote._searchIndex = `${this.currentNote.folder || ''} ${this.currentNote.title} ${this.currentNote.content}`.toLowerCase();
       await this.vault.saveNote(this.currentNote);
       this.renderNoteList();
@@ -1825,7 +1838,9 @@ class CavemanApp {
       this.saveTimeout = setTimeout(async () => {
         if (this.currentNote) {
           const currentRaw = this.editorEl ? this.editorEl.value : this.currentNote.rawContent;
+          this.currentNote.rawContent = currentRaw;
           this.currentNote.content = this.getCleanMarkdown(currentRaw);
+          this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
           this.currentNote._searchIndex = `${this.currentNote.folder || ''} ${this.currentNote.title} ${this.currentNote.content}`.toLowerCase();
           await this.vault.saveNote(this.currentNote);
           if (this._lastSavedTitle !== this.currentNote.title || this._lastSavedFolder !== this.currentNote.folder) {
@@ -2222,6 +2237,7 @@ class CavemanApp {
         const rawContent = this.editorEl.value;
         this.currentNote.rawContent = rawContent;
         this.currentNote.content = this.getCleanMarkdown(rawContent);
+        this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
         this.currentNote.updatedAt = Date.now();
         this.vault.saveNote(this.currentNote);
       }
@@ -2238,6 +2254,7 @@ class CavemanApp {
         const rawContent = this.editorEl.value;
         this.currentNote.rawContent = rawContent;
         this.currentNote.content = this.getCleanMarkdown(rawContent);
+        this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
         this.currentNote.updatedAt = Date.now();
         this.vault.saveNote(this.currentNote);
       }
@@ -4120,7 +4137,7 @@ class CavemanApp {
     return { modified: true, text: newText, cursor: newCursor };
   }
 
-  getCleanMarkdown(text) {
+  getCleanMarkdown(text, visited = new Set()) {
     if (!text) return '';
     
     // Strip sketch spacer blank lines so note content is clean 1-line declarations
@@ -4162,14 +4179,17 @@ class CavemanApp {
       const match = line.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
       if (match) {
         const id = match[1].trim();
+        if (visited.has(id)) continue; // Prevent circular reference / max call stack size exceeded
+        visited.add(id);
+
         if (this.editorFoldMap && this.editorFoldMap.has(id)) {
           const content = this.editorFoldMap.get(id);
-          cleanLines.push(this.getCleanMarkdown(content));
+          cleanLines.push(this.getCleanMarkdown(content, visited));
         } else if (!id.startsWith('f_')) {
           if (/^[A-Za-z0-9+/=]+$/.test(id)) {
             try {
               const decoded = decodeURIComponent(escape(atob(id)));
-              cleanLines.push(this.getCleanMarkdown(decoded));
+              cleanLines.push(this.getCleanMarkdown(decoded, visited));
             } catch (_) {
               // Silently omit corrupted fold markers
             }
