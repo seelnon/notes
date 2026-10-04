@@ -2804,7 +2804,7 @@ class CavemanApp {
       const top = lineTops[i];
       const h = lineHeights[i];
       const formatted = highlightedLines[i] || '';
-      rowsHtml += `<div style="position: absolute; top: ${top}px; height: ${h}px; left: 0; right: 0; overflow: hidden; white-space: pre-wrap; word-break: break-all;">${formatted}</div>`;
+      rowsHtml += `<div style="position: absolute; top: ${top}px; height: ${h}px; left: 0; right: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; word-break: normal;">${formatted}</div>`;
     }
 
     const totalHeight = this._gutterTotalHeight || (lineTops[totalLines] || totalLines * 24);
