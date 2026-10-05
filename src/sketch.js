@@ -9,6 +9,482 @@
  * with a "BG" button near the color wheel allowing users to customize background colors.
  */
 
+export function hexToRgba(hex, alpha = 1) {
+  if (!hex || typeof hex !== 'string') return `rgba(0,0,0,${alpha})`; // fallback
+  if (!/^#([A-Fa-f0-9]{3}){1,2}$/.test(hex)) {
+    return `rgba(0,0,0,${alpha})`; // fallback
+  }
+  let c = hex.substring(1).split('');
+  if (c.length === 3) {
+    c = [c[0], c[0], c[1], c[1], c[2], c[2]];
+  }
+  c = '0x' + c.join('');
+  return `rgba(${[(c>>16)&255, (c>>8)&255, c&255].join(',')},${alpha})`;
+}
+
+export function distToSegment(px, py, x1, y1, x2, y2) {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+}
+
+export function getVariableWidthPath(points, minSizeFactor = 0.22, tipShape = 'round', offsetX = 0, offsetY = 0, sizeMultiplier = 1) {
+  if (!points || points.length < 2) {
+    if (points && points.length === 1) {
+      const p = points[0];
+      const baseSize = (p.size || 3) * sizeMultiplier;
+      const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const currentWidth = Math.max(0.1, minSize + (baseSize - minSize) * pressure);
+      const path = new Path2D();
+      path.arc(p.x + offsetX, p.y + offsetY, Math.max(0.5, currentWidth) / 2, 0, Math.PI * 2);
+      return path;
+    }
+    return new Path2D();
+  }
+
+  const path = new Path2D();
+
+  // --- Forward Pass: Outline top side ---
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const nextP = points[i + 1];
+
+    let currentWidth = (p.size || 3) * sizeMultiplier;
+    const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = ((p.size || 3) * sizeMultiplier) * minSizeFactor;
+    currentWidth = Math.max(0.1, minSize + (((p.size || 3) * sizeMultiplier) - minSize) * pressure);
+
+    let nx = 0, ny = 0;
+    if (nextP) {
+      const dx = nextP.x - p.x;
+      const dy = nextP.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    } else if (i > 0) {
+      const prevP = points[i - 1];
+      const dx = p.x - prevP.x;
+      const dy = p.y - prevP.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    }
+
+    const hw = currentWidth / 2;
+    const x = p.x + offsetX;
+    const y = p.y + offsetY;
+    
+    if (i === 0) {
+      path.moveTo(x + nx * hw, y + ny * hw);
+    } else {
+      path.lineTo(x + nx * hw, y + ny * hw);
+    }
+  }
+
+  // --- Backward Pass: Outline bottom side ---
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    const prevP = points[i - 1];
+    const nextP = points[i + 1];
+
+    let currentWidth = (p.size || 3) * sizeMultiplier;
+    const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = ((p.size || 3) * sizeMultiplier) * minSizeFactor;
+    currentWidth = Math.max(0.1, minSize + (((p.size || 3) * sizeMultiplier) - minSize) * pressure);
+
+    let nx = 0, ny = 0;
+    if (nextP) {
+      const dx = nextP.x - p.x, dy = nextP.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    } else if (i > 0) {
+      const dx = p.x - prevP.x, dy = p.y - prevP.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    }
+
+    const hw = currentWidth / 2;
+    const x = p.x + offsetX;
+    const y = p.y + offsetY;
+    path.lineTo(x - nx * hw, y - ny * hw);
+  }
+
+  path.closePath();
+  
+  // Draw caps for round tips
+  if (tipShape === 'round') {
+    const firstPoint = points[0];
+    const lastPoint = points[points.length - 1];
+    
+    const firstBase = (firstPoint.size || 3) * sizeMultiplier;
+    const lastBase = (lastPoint.size || 3) * sizeMultiplier;
+    const firstWidth = Math.max(0.1, (firstBase * minSizeFactor) + (firstBase - (firstBase * minSizeFactor)) * (firstPoint.pressure !== undefined ? firstPoint.pressure : 1.0));
+    const lastWidth = Math.max(0.1, (lastBase * minSizeFactor) + (lastBase - (lastBase * minSizeFactor)) * (lastPoint.pressure !== undefined ? lastPoint.pressure : 1.0));
+
+    // Use arc to Path2D
+    path.moveTo(firstPoint.x + offsetX + firstWidth / 2, firstPoint.y + offsetY);
+    path.arc(firstPoint.x + offsetX, firstPoint.y + offsetY, firstWidth / 2, 0, Math.PI * 2);
+    
+    if (points.length > 1) {
+      path.moveTo(lastPoint.x + offsetX + lastWidth / 2, lastPoint.y + offsetY);
+      path.arc(lastPoint.x + offsetX, lastPoint.y + offsetY, lastWidth / 2, 0, Math.PI * 2);
+    }
+  }
+
+  return path;
+}
+
+export function drawVariableWidthStrokePolygon(context, points, color, minSizeFactor = 0.22, tipShape = 'round', offsetX = 0, offsetY = 0, sizeMultiplier = 1) {
+  if (!points || points.length < 2) {
+    if (points && points.length === 1) {
+      const p = points[0];
+      const baseSize = (p.size || 3) * sizeMultiplier;
+      const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const currentWidth = Math.max(0.1, minSize + (baseSize - minSize) * pressure);
+      context.beginPath();
+      context.fillStyle = color;
+      context.arc(p.x + offsetX, p.y + offsetY, Math.max(0.5, currentWidth) / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+    return;
+  }
+
+  context.beginPath();
+  context.fillStyle = color;
+
+  // --- Forward Pass: Outline top side ---
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const nextP = points[i + 1];
+
+    let currentWidth = (p.size || 3) * sizeMultiplier;
+    const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = ((p.size || 3) * sizeMultiplier) * minSizeFactor;
+    currentWidth = Math.max(0.1, minSize + (((p.size || 3) * sizeMultiplier) - minSize) * pressure);
+
+    let nx = 0, ny = 0;
+    if (nextP) {
+      const dx = nextP.x - p.x;
+      const dy = nextP.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    } else if (i > 0) {
+      const prevP = points[i - 1];
+      const dx = p.x - prevP.x;
+      const dy = p.y - prevP.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    }
+
+    const hw = currentWidth / 2;
+    const x = p.x + offsetX;
+    const y = p.y + offsetY;
+    
+    if (i === 0) {
+      context.moveTo(x + nx * hw, y + ny * hw);
+    } else {
+      context.lineTo(x + nx * hw, y + ny * hw);
+    }
+  }
+
+  // --- Backward Pass: Outline bottom side ---
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    const prevP = points[i - 1];
+    const nextP = points[i + 1];
+
+    let currentWidth = (p.size || 3) * sizeMultiplier;
+    const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = ((p.size || 3) * sizeMultiplier) * minSizeFactor;
+    currentWidth = Math.max(0.1, minSize + (((p.size || 3) * sizeMultiplier) - minSize) * pressure);
+
+    let nx = 0, ny = 0;
+    if (nextP) {
+      const dx = nextP.x - p.x, dy = nextP.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    } else if (i > 0) {
+      const dx = p.x - prevP.x, dy = p.y - prevP.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    }
+
+    const hw = currentWidth / 2;
+    const x = p.x + offsetX;
+    const y = p.y + offsetY;
+    context.lineTo(x - nx * hw, y - ny * hw);
+  }
+
+  context.closePath();
+  context.fill();
+
+  // Caps for round tips
+  if (tipShape === 'round') {
+    const firstPoint = points[0];
+    const lastPoint = points[points.length - 1];
+
+    const firstBase = (firstPoint.size || 3) * sizeMultiplier;
+    const lastBase = (lastPoint.size || 3) * sizeMultiplier;
+    const firstWidth = Math.max(0.1, (firstBase * minSizeFactor) + (firstBase - (firstBase * minSizeFactor)) * (firstPoint.pressure !== undefined ? firstPoint.pressure : 1.0));
+    const lastWidth = Math.max(0.1, (lastBase * minSizeFactor) + (lastBase - (lastBase * minSizeFactor)) * (lastPoint.pressure !== undefined ? lastPoint.pressure : 1.0));
+
+    context.beginPath();
+    context.arc(firstPoint.x + offsetX, firstPoint.y + offsetY, firstWidth / 2, 0, Math.PI * 2);
+    context.fill();
+
+    if (points.length > 1) {
+      context.beginPath();
+      context.arc(lastPoint.x + offsetX, lastPoint.y + offsetY, lastWidth / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+}
+
+export function drawPenStroke(context, stroke, isPreview = false, targetScale = 1) {
+  if (!stroke || !stroke.points || stroke.points.length === 0) return;
+
+  const minSizeFactor = stroke.minSizeFactor !== undefined ? stroke.minSizeFactor : (stroke.tool === 'highlighter' ? 0.75 : 0.22);
+  const tipShape = stroke.tipShape || 'round';
+  const opacity = stroke.opacity !== undefined ? stroke.opacity : 1.0;
+  const strokeColor = hexToRgba(stroke.color, opacity);
+
+  // Handle single point strokes
+  if (stroke.points.length < 2) { 
+    if (stroke.points.length === 1) {
+      const p = stroke.points[0];
+      const baseSize = (p.size || stroke.size || stroke.width || 3) * targetScale;
+      const minSize = baseSize * minSizeFactor;
+      const pressure = p.pressure !== undefined ? p.pressure : 1.0;
+      const singlePointSize = minSize + (baseSize - minSize) * pressure;
+      
+      context.fillStyle = strokeColor;
+      context.beginPath();
+      context.arc(p.x * targetScale, p.y * targetScale, Math.max(0.5, singlePointSize) / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+    return;
+  }
+
+  if (stroke.nonCompoundingOpacity) {
+    if (!isPreview && stroke.pathObject) {
+      // High-performance Path2D drawing for finalized non-compounding strokes
+      context.fillStyle = strokeColor;
+      context.fill(stroke.pathObject);
+      return;
+    }
+
+    if (isPreview || !stroke.bitmap) {
+      // For preview or when bitmap isn't ready/wanted, draw directly
+      drawVariableWidthStrokePolygon(context, stroke.points, strokeColor, minSizeFactor, tipShape, 0, 0, targetScale);
+      
+      // Auto-cache pathObject if it doesn't exist yet and we're not in preview
+      if (!isPreview && !stroke.pathObject) {
+        stroke.pathObject = getVariableWidthPath(stroke.points, minSizeFactor, tipShape, 0, 0, targetScale);
+      }
+    } else if (stroke.bitmap) {
+      // Use cached bitmap
+      context.globalAlpha = opacity;
+      context.drawImage(stroke.bitmap, 
+                        stroke.bitmapX, 
+                        stroke.bitmapY,
+                        stroke.bitmapWidth,
+                        stroke.bitmapHeight);
+      context.globalAlpha = 1;
+    }
+  } else {
+    // Original compounding drawing method
+    context.strokeStyle = strokeColor;
+    context.fillStyle = strokeColor;
+    context.lineCap = tipShape; 
+    context.lineJoin = tipShape; 
+    
+    context.beginPath();
+    context.moveTo(stroke.points[0].x * targetScale, stroke.points[0].y * targetScale);
+
+    for (let i = 1; i < stroke.points.length - 1; i++) {
+      const p1 = stroke.points[i - 1];
+      const p2 = stroke.points[i];
+      const p3 = stroke.points[i + 1];
+
+      const cp2x = (p2.x + (p3.x - p2.x) / 2) * targetScale;
+      const cp2y = (p2.y + (p3.y - p2.y) / 2) * targetScale;
+
+      const baseSize = (p2.size || stroke.size || stroke.width || 3) * targetScale;
+      const pressure = p2.pressure !== undefined ? p2.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const currentLineWidth = minSize + (baseSize - minSize) * pressure;
+      
+      context.lineWidth = Math.max(0.5, currentLineWidth); // World-space width
+      context.quadraticCurveTo(p2.x * targetScale, p2.y * targetScale, cp2x, cp2y);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(cp2x, cp2y);
+    }
+    
+    if (stroke.points.length >= 2) {
+      const lastPoint = stroke.points[stroke.points.length - 1];
+      const baseSize = (lastPoint.size || stroke.size || stroke.width || 3) * targetScale;
+      const pressure = lastPoint.pressure !== undefined ? lastPoint.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const lastWidth = minSize + (baseSize - minSize) * pressure;
+      context.lineWidth = Math.max(0.5, lastWidth); // World-space width
+      context.lineTo(lastPoint.x * targetScale, lastPoint.y * targetScale);
+      context.stroke();
+    }
+  }
+}
+
+export function getVariableWidthSvgPath(points, minSizeFactor = 0.22, tipShape = 'round', offsetX = 0, offsetY = 0, sizeMultiplier = 1) {
+  if (!points || points.length === 0) return '';
+  if (points.length === 1) {
+    const p = points[0];
+    const baseSize = (p.size || 3) * sizeMultiplier;
+    const press = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = baseSize * minSizeFactor;
+    const w = Math.max(0.5, minSize + (baseSize - minSize) * press);
+    const r = (w / 2).toFixed(2);
+    return `M ${(p.x + offsetX - r).toFixed(2)} ${(p.y + offsetY).toFixed(2)} A ${r} ${r} 0 1 0 ${(p.x + offsetX + Number(r)).toFixed(2)} ${(p.y + offsetY).toFixed(2)} A ${r} ${r} 0 1 0 ${(p.x + offsetX - r).toFixed(2)} ${(p.y + offsetY).toFixed(2)} Z`;
+  }
+
+  const topPoints = [];
+  const bottomPoints = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const nextP = points[i + 1];
+    const prevP = points[i - 1];
+
+    const baseSize = (p.size || 3) * sizeMultiplier;
+    const press = p.pressure !== undefined ? p.pressure : 1.0;
+    const minSize = baseSize * minSizeFactor;
+    const currentWidth = Math.max(0.1, minSize + (baseSize - minSize) * press);
+    const hw = currentWidth / 2;
+
+    let nx = 0, ny = 0;
+    if (nextP) {
+      const dx = nextP.x - p.x;
+      const dy = nextP.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    } else if (prevP) {
+      const dx = p.x - prevP.x;
+      const dy = p.y - prevP.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { nx = -dy / len; ny = dx / len; }
+    }
+
+    const x = p.x + offsetX;
+    const y = p.y + offsetY;
+    topPoints.push({ x: x + nx * hw, y: y + ny * hw });
+    bottomPoints.push({ x: x - nx * hw, y: y - ny * hw });
+  }
+
+  let d = `M ${topPoints[0].x.toFixed(2)} ${topPoints[0].y.toFixed(2)} `;
+  for (let i = 1; i < topPoints.length; i++) {
+    d += `L ${topPoints[i].x.toFixed(2)} ${topPoints[i].y.toFixed(2)} `;
+  }
+  for (let i = bottomPoints.length - 1; i >= 0; i--) {
+    d += `L ${bottomPoints[i].x.toFixed(2)} ${bottomPoints[i].y.toFixed(2)} `;
+  }
+  d += 'Z ';
+
+  if (tipShape === 'round') {
+    const firstP = points[0];
+    const lastP = points[points.length - 1];
+    const firstBase = (firstP.size || 3) * sizeMultiplier;
+    const firstPress = firstP.pressure !== undefined ? firstP.pressure : 1.0;
+    const firstW = Math.max(0.1, firstBase * minSizeFactor + (firstBase - firstBase * minSizeFactor) * firstPress);
+    const r1 = (firstW / 2).toFixed(2);
+    d += `M ${(firstP.x + offsetX - r1).toFixed(2)} ${(firstP.y + offsetY).toFixed(2)} A ${r1} ${r1} 0 1 0 ${(firstP.x + offsetX + Number(r1)).toFixed(2)} ${(firstP.y + offsetY).toFixed(2)} A ${r1} ${r1} 0 1 0 ${(firstP.x + offsetX - r1).toFixed(2)} ${(firstP.y + offsetY).toFixed(2)} Z `;
+
+    if (points.length > 1) {
+      const lastBase = (lastP.size || 3) * sizeMultiplier;
+      const lastPress = lastP.pressure !== undefined ? lastP.pressure : 1.0;
+      const lastW = Math.max(0.1, lastBase * minSizeFactor + (lastBase - lastBase * minSizeFactor) * lastPress);
+      const r2 = (lastW / 2).toFixed(2);
+      d += `M ${(lastP.x + offsetX - r2).toFixed(2)} ${(lastP.y + offsetY).toFixed(2)} A ${r2} ${r2} 0 1 0 ${(lastP.x + offsetX + Number(r2)).toFixed(2)} ${(lastP.y + offsetY).toFixed(2)} A ${r2} ${r2} 0 1 0 ${(lastP.x + offsetX - r2).toFixed(2)} ${(lastP.y + offsetY).toFixed(2)} Z`;
+    }
+  }
+
+  return d.trim();
+}
+
+export function renderStrokeToSvg(stroke, isNight = false) {
+  if (!stroke) return '';
+  let color = stroke.color;
+  if (!color || color === 'theme-ink') {
+    color = '#e5c07b';
+  }
+  const opacity = stroke.opacity !== undefined ? stroke.opacity : 1.0;
+  const tipShape = stroke.tipShape || 'round';
+  const minSizeFactor = stroke.minSizeFactor !== undefined ? stroke.minSizeFactor : (stroke.tool === 'highlighter' ? 0.75 : 0.22);
+
+  // Single point
+  if (stroke.points && stroke.points.length === 1) {
+    const p = stroke.points[0];
+    const baseSize = stroke.size || p.size || stroke.width || 3;
+    const minSize = baseSize * minSizeFactor;
+    const press = p.pressure !== undefined ? p.pressure : 1.0;
+    const w = Math.max(0.5, minSize + (baseSize - minSize) * press);
+    const r = (w / 2).toFixed(2);
+    return `<circle cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="${r}" fill="${hexToRgba(color, opacity)}" />`;
+  }
+
+  // Non-compounding polygon stroke (highlighter / brush / polygon)
+  if (stroke.nonCompoundingOpacity && stroke.points && stroke.points.length >= 2) {
+    const d = stroke.polygonPath || getVariableWidthSvgPath(stroke.points, minSizeFactor, tipShape);
+    return `<path d="${d}" fill="${hexToRgba(color, opacity)}" />`;
+  }
+
+  // Compounding quadratic segments stroke (ink pen)
+  if (stroke.points && stroke.points.length >= 2) {
+    const strokeColor = hexToRgba(color, opacity);
+    let segs = '';
+    for (let i = 1; i < stroke.points.length - 1; i++) {
+      const p1 = stroke.points[i - 1];
+      const p2 = stroke.points[i];
+      const p3 = stroke.points[i + 1];
+
+      const cp1x = i === 1 ? p1.x : (p1.x + (p2.x - p1.x) / 2);
+      const cp1y = i === 1 ? p1.y : (p1.y + (p2.y - p1.y) / 2);
+      const cp2x = p2.x + (p3.x - p2.x) / 2;
+      const cp2y = p2.y + (p3.y - p2.y) / 2;
+
+      const baseSize = p2.size || stroke.size || stroke.width || 3;
+      const press = p2.pressure !== undefined ? p2.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const currentLineWidth = Math.max(0.5, minSize + (baseSize - minSize) * press);
+
+      segs += `<path d="M ${cp1x.toFixed(2)} ${cp1y.toFixed(2)} Q ${p2.x.toFixed(2)} ${p2.y.toFixed(2)} ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}" stroke="${strokeColor}" stroke-width="${currentLineWidth.toFixed(2)}" stroke-linecap="${tipShape}" stroke-linejoin="${tipShape}" fill="none" />`;
+    }
+
+    if (stroke.points.length >= 2) {
+      const lastPoint = stroke.points[stroke.points.length - 1];
+      const prevP = stroke.points[stroke.points.length - 2];
+      const cp1x = stroke.points.length === 2 ? prevP.x : (prevP.x + (lastPoint.x - prevP.x) / 2);
+      const cp1y = stroke.points.length === 2 ? prevP.y : (prevP.y + (lastPoint.y - prevP.y) / 2);
+      const baseSize = lastPoint.size || stroke.size || stroke.width || 3;
+      const press = lastPoint.pressure !== undefined ? lastPoint.pressure : 1.0;
+      const minSize = baseSize * minSizeFactor;
+      const lastWidth = Math.max(0.5, minSize + (baseSize - minSize) * press);
+
+      segs += `<path d="M ${cp1x.toFixed(2)} ${cp1y.toFixed(2)} L ${lastPoint.x.toFixed(2)} ${lastPoint.y.toFixed(2)}" stroke="${strokeColor}" stroke-width="${lastWidth.toFixed(2)}" stroke-linecap="${tipShape}" fill="none" />`;
+    }
+
+    return `<g>${segs}</g>`;
+  }
+
+  // Legacy fallback for strokes that only stored 'd'
+  if (stroke.d) {
+    const strokeWidth = stroke.width || stroke.size || 2.5;
+    return `<path d="${stroke.d}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${opacity}" />`;
+  }
+
+  return '';
+}
+
 export class SketchManager {
   constructor(app) {
     this.app = app;
@@ -224,16 +700,7 @@ export class SketchManager {
     let pathsHtml = '';
 
     for (const s of strokes) {
-      let color = s.color;
-      if (!color || color === 'theme-ink') {
-        color = '#e5c07b';
-      }
-      const opacity = s.opacity !== undefined ? s.opacity : 1;
-      const strokeWidth = s.width || 2.5;
-      const d = s.d || this.pointsToPath(s.points);
-      if (d) {
-        pathsHtml += `<path d="${d}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${opacity}" />`;
-      }
+      pathsHtml += renderStrokeToSvg(s, isNightMode);
     }
 
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="background-color: ${bgColor}; width: 100%; height: auto; display: block; border-radius: 2px;">
@@ -326,8 +793,9 @@ export class SketchWidget {
 
       <div class="sketch-widget-toolbar hidden">
         <div class="sketch-tools-group">
-          <button type="button" class="sketch-tool-btn active" data-tool="pen" title="Ink Pen">✒ Ink</button>
-          <button type="button" class="sketch-tool-btn" data-tool="highlighter" title="Highlighter">🖌 Highlight</button>
+          <button type="button" class="sketch-tool-btn active" data-tool="pen" title="Ink Pen (Smooth varying line)">✒ Ink</button>
+          <button type="button" class="sketch-tool-btn" data-tool="brush" title="Calligraphy Brush (Outline polygon)">🖋 Brush</button>
+          <button type="button" class="sketch-tool-btn" data-tool="highlighter" title="Highlighter (Translucent marker)">🖌 Highlight</button>
           <button type="button" class="sketch-tool-btn" data-tool="eraser" title="Eraser">⌫ Erase</button>
         </div>
 
@@ -1028,13 +1496,23 @@ export class SketchWidget {
     try { this.activeCanvas.setPointerCapture(e.pointerId); } catch (_) {}
 
     const pos = this.getPointerPos(e);
+    const time = performance.now();
 
     if (this.activeTool === 'eraser') {
       this.eraseAt(pos.x, pos.y);
       return;
     }
 
-    this.currentPoints = [pos];
+    const isPenHardware = (e.pointerType === 'pen' && e.pressure > 0);
+    const initialPressure = isPenHardware ? e.pressure : 0.6;
+
+    this.currentPoints = [{
+      x: pos.x,
+      y: pos.y,
+      size: this.activeWidth,
+      pressure: initialPressure,
+      time
+    }];
     this.redoStack = [];
 
     this.ctx.clearRect(0, 0, this.width, this.height);
@@ -1051,12 +1529,38 @@ export class SketchWidget {
     }
 
     const last = this.currentPoints[this.currentPoints.length - 1];
+    const time = performance.now();
     if (last) {
       const dist = Math.hypot(pos.x - last.x, pos.y - last.y);
-      if (dist < 2) return;
+      if (dist < 1.0) return;
+
+      const dt = Math.max(1, time - last.time);
+      const speed = dist / dt; // pixels per ms
+
+      let pressure;
+      if (e.pointerType === 'pen' && e.pressure > 0) {
+        pressure = e.pressure;
+      } else {
+        // Natural speed-based line variety for mouse/trackpad:
+        // Slow deliberate strokes press down (thicker), brisk swift motions taper (thinner)
+        const targetPressure = Math.max(0.18, Math.min(1.0, 1.25 / (speed * 0.38 + 0.8)));
+        pressure = last.pressure * 0.5 + targetPressure * 0.5;
+      }
+
+      // Smoothing to eliminate raw mouse/digitizer jitter
+      const smooth = 0.48;
+      const smoothX = last.x + (pos.x - last.x) * smooth;
+      const smoothY = last.y + (pos.y - last.y) * smooth;
+
+      this.currentPoints.push({
+        x: smoothX,
+        y: smoothY,
+        size: this.activeWidth,
+        pressure,
+        time
+      });
     }
 
-    this.currentPoints.push(pos);
     this.drawCurrentActiveStroke();
   }
 
@@ -1068,17 +1572,35 @@ export class SketchWidget {
     if (this.activeTool === 'eraser') return;
 
     if (this.currentPoints.length > 0) {
-      const d = this.manager.pointsToPath(this.currentPoints);
       const isHighlighter = this.activeTool === 'highlighter';
+      const isBrush = this.activeTool === 'brush';
+      const minSizeFactor = isHighlighter ? 0.75 : (isBrush ? 0.15 : 0.22);
+      const nonCompoundingOpacity = isHighlighter || isBrush;
+      const opacity = isHighlighter ? 0.35 : 1.0;
+      const tipShape = 'round';
+
+      // Slight natural taper at end if mouse
+      if (this.currentPoints.length > 2 && e.pointerType !== 'pen') {
+        const lastP = this.currentPoints[this.currentPoints.length - 1];
+        lastP.pressure = Math.max(0.18, lastP.pressure * 0.6);
+      }
 
       const stroke = {
-        d,
-        points: this.currentPoints,
+        points: [...this.currentPoints],
         color: this.activeColor,
-        width: isHighlighter ? this.activeWidth * 3.5 : this.activeWidth,
-        opacity: isHighlighter ? 0.35 : 1,
+        size: this.activeWidth,
+        width: this.activeWidth,
+        minSizeFactor,
+        tipShape,
+        opacity,
+        nonCompoundingOpacity,
         tool: this.activeTool
       };
+
+      if (nonCompoundingOpacity) {
+        stroke.pathObject = getVariableWidthPath(stroke.points, minSizeFactor, tipShape);
+        stroke.polygonPath = getVariableWidthSvgPath(stroke.points, minSizeFactor, tipShape);
+      }
 
       this.strokes.push(stroke);
       this.currentPoints = [];
@@ -1089,11 +1611,11 @@ export class SketchWidget {
   }
 
   eraseAt(x, y) {
-    const threshold = this.activeWidth * 4;
+    const threshold = Math.max(10, this.activeWidth * 3.5);
     const beforeCount = this.strokes.length;
 
     this.strokes = this.strokes.filter(stroke => {
-      if (!stroke.points) return true;
+      if (!stroke.points || stroke.points.length === 0) return true;
       for (const p of stroke.points) {
         if (Math.hypot(p.x - x, p.y - y) <= threshold) {
           return false;
@@ -1110,58 +1632,36 @@ export class SketchWidget {
 
   drawCurrentActiveStroke() {
     this.ctx.clearRect(0, 0, this.width, this.height);
-    if (this.currentPoints.length === 0) return;
+    if (!this.currentPoints || this.currentPoints.length === 0) return;
 
     const isHighlighter = this.activeTool === 'highlighter';
-    const width = isHighlighter ? this.activeWidth * 3.5 : this.activeWidth;
-    const opacity = isHighlighter ? 0.35 : 1;
+    const isBrush = this.activeTool === 'brush';
+    const minSizeFactor = isHighlighter ? 0.75 : (isBrush ? 0.15 : 0.22);
+    const nonCompoundingOpacity = isHighlighter || isBrush;
+    const opacity = isHighlighter ? 0.35 : 1.0;
+    const tipShape = 'round';
 
-    this.ctx.save();
-    this.ctx.lineCap = 'round';
-    this.ctx.lineJoin = 'round';
-    this.ctx.strokeStyle = this.activeColor;
-    this.ctx.lineWidth = width;
-    this.ctx.globalAlpha = opacity;
+    const stroke = {
+      points: this.currentPoints,
+      color: this.activeColor,
+      size: this.activeWidth,
+      width: this.activeWidth,
+      minSizeFactor,
+      tipShape,
+      opacity,
+      nonCompoundingOpacity,
+      tool: this.activeTool
+    };
 
-    if (this.currentPoints.length === 1) {
-      this.ctx.beginPath();
-      this.ctx.arc(this.currentPoints[0].x, this.currentPoints[0].y, width / 2, 0, Math.PI * 2);
-      this.ctx.fillStyle = this.activeColor;
-      this.ctx.fill();
-    } else {
-      this.ctx.beginPath();
-      this.ctx.moveTo(this.currentPoints[0].x, this.currentPoints[0].y);
-
-      for (let i = 1; i < this.currentPoints.length - 1; i++) {
-        const p1 = this.currentPoints[i];
-        const p2 = this.currentPoints[i + 1];
-        const mx = (p1.x + p2.x) / 2;
-        const my = (p1.y + p2.y) / 2;
-        this.ctx.quadraticCurveTo(p1.x, p1.y, mx, my);
-      }
-
-      const last = this.currentPoints[this.currentPoints.length - 1];
-      this.ctx.lineTo(last.x, last.y);
-      this.ctx.stroke();
-    }
-
-    this.ctx.restore();
+    drawPenStroke(this.ctx, stroke, true);
   }
 
   redrawSVG() {
+    const isNight = document.body.classList.contains('night-mode');
     let pathsHtml = '';
 
     for (const s of this.strokes) {
-      let color = s.color;
-      if (!color || color === 'theme-ink') {
-        color = '#e5c07b';
-      }
-      const opacity = s.opacity !== undefined ? s.opacity : 1;
-      const strokeWidth = s.width || 2.5;
-      const d = s.d || this.manager.pointsToPath(s.points);
-      if (d) {
-        pathsHtml += `<path d="${d}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${opacity}" />`;
-      }
+      pathsHtml += renderStrokeToSvg(s, isNight);
     }
 
     const currentBg = this.bgColor || '#241f1a';

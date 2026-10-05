@@ -72,11 +72,20 @@ export class HeadingFoldEngine {
 
     let endIndex = lineIndex + 1;
     const total = lines.length;
+    let inCodeBlock = false;
     while (endIndex < total) {
       const nextLine = lines[endIndex];
-      const nextLevel = this.getHeadingLevel(nextLine);
-      if (nextLevel > 0 && nextLevel <= level) {
-        break;
+      const trimmed = nextLine ? nextLine.trim() : '';
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        inCodeBlock = !inCodeBlock;
+        endIndex++;
+        continue;
+      }
+      if (!inCodeBlock) {
+        const nextLevel = this.getHeadingLevel(nextLine);
+        if (nextLevel > 0 && nextLevel <= level) {
+          break;
+        }
       }
       endIndex++;
     }

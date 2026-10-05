@@ -1,3 +1,5 @@
+import { renderStrokeToSvg } from './sketch.js';
+
 /**
  * Caveman Notes - Editor Module
  * Handles Markdown rendering and Image injection
@@ -400,16 +402,7 @@ export class Editor {
     let pathsHtml = '';
 
     for (const s of strokes) {
-      let color = s.color;
-      if (!color || color === 'theme-ink') {
-        color = isNight ? '#e5c07b' : '#141414';
-      }
-      const opacity = s.opacity !== undefined ? s.opacity : 1;
-      const strokeWidth = s.width || 2.5;
-      const d = s.d || (window.app?.sketchManager ? window.app.sketchManager.pointsToPath(s.points) : '');
-      if (d) {
-        pathsHtml += `<path d="${d}" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${opacity}" />`;
-      }
+      pathsHtml += renderStrokeToSvg(s, isNight);
     }
 
     const displayId = (sketchData && sketchData.id) || item.id || 'SKETCH';

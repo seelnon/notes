@@ -29,6 +29,7 @@ class CavemanApp {
     this.newNoteBtn = document.getElementById('new-note');
     this.togglePreviewBtn = document.getElementById('toggle-preview');
     this.canvasModeBtn = document.getElementById('canvas-mode-btn');
+    this.unfoldAllBtn = document.getElementById('unfold-all-btn');
     this.deleteNoteBtn = document.getElementById('delete-note');
     this.exportBtn = document.getElementById('export-btn');
     this.exportNoteBtn = document.getElementById('download-pdf-btn');
@@ -441,9 +442,10 @@ class CavemanApp {
     this.lineNumbersEl.addEventListener('click', (e) => {
       const indicator = e.target.closest('.fold-indicator');
       if (indicator) {
-        const lineIndex = parseInt(indicator.dataset.lineIndex);
+        const lineIndex = parseInt(indicator.dataset.lineIndex, 10);
+        const foldId = indicator.dataset.foldId || null;
         if (indicator.classList.contains('collapsed')) {
-          this.unfoldHeading(lineIndex);
+          this.unfoldHeading(lineIndex, foldId);
         } else {
           this.foldHeading(lineIndex);
         }
@@ -453,9 +455,10 @@ class CavemanApp {
       if (foldRow) {
         const ind = foldRow.querySelector('.fold-indicator');
         if (ind) {
-          const lineIndex = parseInt(ind.dataset.lineIndex);
+          const lineIndex = parseInt(ind.dataset.lineIndex, 10);
+          const foldId = ind.dataset.foldId || null;
           if (ind.classList.contains('collapsed')) {
-            this.unfoldHeading(lineIndex);
+            this.unfoldHeading(lineIndex, foldId);
           } else {
             this.foldHeading(lineIndex);
           }
@@ -625,10 +628,23 @@ class CavemanApp {
     this.folderInput.addEventListener('input', () => this.handleInput());
     this.togglePreviewBtn.addEventListener('click', () => this.toggleEditorMode());
     this.canvasModeBtn.addEventListener('click', () => this.toggleCanvasMode());
+    if (this.unfoldAllBtn) this.unfoldAllBtn.addEventListener('click', () => this.unfoldAllHeadings());
     this.deleteNoteBtn.addEventListener('click', () => this.deleteCurrentNote());
 
     // Arrow navigation & Sketch Block Auto-expansion
     this.editorEl.addEventListener('keydown', (e) => {
+      // Unfold all / Fold all shortcuts
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'u') {
+        e.preventDefault();
+        this.unfoldAllHeadings();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        this.foldAllHeadings();
+        return;
+      }
+
       // Active sketch shortcut interception inside textarea
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
         if (this.sketchManager && this.sketchManager.activeWidget && !this.sketchManager.activeWidget.isBaked) {
@@ -1722,10 +1738,7 @@ class CavemanApp {
       noteContent = res.text;
     }
 
-    this.editorEl.value = noteContent;
-    
     this.editorFoldMap.clear();
-    this.foldIdCounter = 1;
 
     if (note.foldMap && typeof note.foldMap === 'object') {
       for (const [k, v] of Object.entries(note.foldMap)) {
@@ -1736,49 +1749,38 @@ class CavemanApp {
         this.editorFoldMap.set(k, v);
       }
     }
-    
-    // Auto-restore folded headings
-    try {
-      const noteKey = `caveman-folded-${note.id || note.title || 'default'}`;
-      const folded = JSON.parse(localStorage.getItem(noteKey) || '[]');
-      if (Array.isArray(folded) && folded.length > 0) {
-        let lines = this.editorEl.value.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const cleanLine = line.trim();
-          if (/^(\s*#{1,6})\s+/.test(line) && folded.includes(cleanLine)) {
-            const match = line.match(/^(\s*#{1,6})\s+/);
-            const level = match ? match[1].trim().length : 0;
-            if (level > 0) {
-              let endIndex = i + 1;
-              while (endIndex < lines.length) {
-                const nextLine = lines[endIndex];
-                const nextMatch = nextLine.match(/^(\s*#{1,6})\s+/);
-                const nextLevel = nextMatch ? nextMatch[1].trim().length : 0;
-                if (nextLevel > 0 && nextLevel <= level) {
-                  break;
-                }
-                endIndex++;
-              }
-              const foldLines = lines.slice(i + 1, endIndex);
-              if (foldLines.length > 0 && foldLines[0] && typeof foldLines[0].trim === 'function' && !foldLines[0].trim().startsWith('<!-- FOLD:')) {
-                const foldContent = foldLines.join('\n');
-                const shortId = `f_${this.foldIdCounter++}`;
-                this.editorFoldMap.set(shortId, foldContent);
-                lines = [
-                  ...lines.slice(0, i + 1),
-                  `<!-- FOLD:${shortId} -->`,
-                  ...lines.slice(endIndex)
-                ];
-              }
-            }
+
+    // Auto-heal duplicate fold marker IDs if corrupted from previous sessions
+    if (noteContent && noteContent.includes('<!-- FOLD:')) {
+      const seenFolds = new Set();
+      let healed = false;
+      const healedLines = noteContent.split('\n').map(line => {
+        const m = line.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+        if (m) {
+          const fid = m[1].trim();
+          if (seenFolds.has(fid)) {
+            // Collision detected! Re-assign to a guaranteed unique ID
+            const newId = `f_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 9)}`;
+            const oldContent = this.editorFoldMap.get(fid) || '';
+            this.editorFoldMap.set(newId, oldContent);
+            seenFolds.add(newId);
+            healed = true;
+            return `<!-- FOLD:${newId} -->`;
           }
+          seenFolds.add(fid);
         }
-        this.editorEl.value = lines.join('\n');
+        return line;
+      });
+
+      if (healed) {
+        noteContent = healedLines.join('\n');
+        note.rawContent = noteContent;
+        note.foldMap = Object.fromEntries(this.editorFoldMap);
+        this.vault.saveNote(note).catch(() => {});
       }
-    } catch (e) {
-      console.warn("Failed to restore folds:", e);
     }
+
+    this.editorEl.value = noteContent;
     
     if (this.viewMode === 'editor') {
       this.updateLineNumbers();
@@ -1937,6 +1939,7 @@ class CavemanApp {
       return;
     }
 
+    this.pruneFoldMap();
     this.currentNote.title = newTitle;
     this.currentNote.folder = newFolder;
     this.currentNote.rawContent = rawContent;
@@ -1949,6 +1952,7 @@ class CavemanApp {
 
     if (forceSave) {
       clearTimeout(this.saveTimeout);
+      this.pruneFoldMap();
       const newContent = this.getCleanMarkdown(rawContent);
       this.currentNote.content = newContent;
       this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
@@ -1963,6 +1967,7 @@ class CavemanApp {
       this.saveTimeout = setTimeout(async () => {
         if (this.currentNote) {
           const currentRaw = this.editorEl ? this.editorEl.value : this.currentNote.rawContent;
+          this.pruneFoldMap();
           this.currentNote.rawContent = currentRaw;
           this.currentNote.content = this.getCleanMarkdown(currentRaw);
           this.currentNote.foldMap = Object.fromEntries(this.editorFoldMap);
@@ -1998,7 +2003,8 @@ class CavemanApp {
       content,
       start: this.editorEl.selectionStart,
       end: this.editorEl.selectionEnd,
-      sketches
+      sketches,
+      foldMap: Object.fromEntries(this.editorFoldMap)
     });
 
     if (history.undo.length > 100) history.undo.shift();
@@ -2025,7 +2031,8 @@ class CavemanApp {
         content: currentText,
         start: currentStart,
         end: currentEnd,
-        sketches: currentSketches
+        sketches: currentSketches,
+        foldMap: Object.fromEntries(this.editorFoldMap)
       });
     }
 
@@ -2040,6 +2047,9 @@ class CavemanApp {
         ...(this.currentNote.sketches || {}),
         ...JSON.parse(JSON.stringify(prev.sketches))
       };
+    }
+    if (prev.foldMap) {
+      this.editorFoldMap = new Map(Object.entries(prev.foldMap));
     }
     this.editorEl.value = prev.content;
     this.editorEl.setSelectionRange(prev.start, prev.end);
@@ -2070,6 +2080,9 @@ class CavemanApp {
         ...(this.currentNote.sketches || {}),
         ...JSON.parse(JSON.stringify(next.sketches))
       };
+    }
+    if (next.foldMap) {
+      this.editorFoldMap = new Map(Object.entries(next.foldMap));
     }
     this.editorEl.value = next.content;
     this.editorEl.setSelectionRange(next.start, next.end);
@@ -4106,26 +4119,40 @@ class CavemanApp {
       const h = lineHeights[i];
       const level = headingLevels[i];
       const isHeading = level > 0;
-      const isNextLineFold = (i + 1 < totalLines) && cachedLines && cachedLines[i + 1] && typeof cachedLines[i + 1].startsWith === 'function' && cachedLines[i + 1].startsWith('<!-- FOLD:');
 
       let indicatorHtml = '';
       let foldClass = '';
       if (isHeading) {
-        let hasContent = false;
-        for (let nextIdx = i + 1; nextIdx < totalLines; nextIdx++) {
-          const nextLevel = headingLevels[nextIdx];
-          if (nextLevel > 0 && nextLevel <= level) break;
-          if (cachedLines && cachedLines[nextIdx] && cachedLines[nextIdx].trim() !== '') {
-            hasContent = true;
-            break;
+        let isFolded = false;
+        let foldId = '';
+        for (let checkIdx = i + 1; checkIdx < totalLines; checkIdx++) {
+          const checkLine = cachedLines[checkIdx];
+          if (!checkLine || checkLine.trim() === '') continue; // Skip blank lines
+          const foldMatch = checkLine.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+          if (foldMatch) {
+            isFolded = true;
+            foldId = foldMatch[1].trim();
           }
+          break; // Stop at first non-empty line
         }
-        if (isNextLineFold) {
-          indicatorHtml = `<span class="fold-indicator collapsed" data-line-index="${i}">▶</span>`;
+
+        if (isFolded) {
+          indicatorHtml = `<span class="fold-indicator collapsed" data-line-index="${i}" data-fold-id="${foldId}">▶</span>`;
           foldClass = ' has-fold is-folded';
-        } else if (hasContent) {
-          indicatorHtml = `<span class="fold-indicator expanded" data-line-index="${i}">▼</span>`;
-          foldClass = ' has-fold is-expanded';
+        } else {
+          let hasContent = false;
+          for (let nextIdx = i + 1; nextIdx < totalLines; nextIdx++) {
+            const nextLevel = headingLevels[nextIdx];
+            if (nextLevel > 0 && nextLevel <= level) break;
+            if (cachedLines && cachedLines[nextIdx] && cachedLines[nextIdx].trim() !== '') {
+              hasContent = true;
+              break;
+            }
+          }
+          if (hasContent) {
+            indicatorHtml = `<span class="fold-indicator expanded" data-line-index="${i}">▼</span>`;
+            foldClass = ' has-fold is-expanded';
+          }
         }
       }
 
@@ -4378,24 +4405,76 @@ class CavemanApp {
         if (visited.has(id)) continue; // Prevent circular reference / max call stack size exceeded
         visited.add(id);
 
+        let content = null;
         if (this.editorFoldMap && this.editorFoldMap.has(id)) {
-          const content = this.editorFoldMap.get(id);
-          cleanLines.push(this.getCleanMarkdown(content, visited));
+          content = this.editorFoldMap.get(id);
+        } else if (this.currentNote && this.currentNote.foldMap && this.currentNote.foldMap[id]) {
+          content = this.currentNote.foldMap[id];
         } else if (!id.startsWith('f_')) {
           if (/^[A-Za-z0-9+/=]+$/.test(id)) {
             try {
-              const decoded = decodeURIComponent(escape(atob(id)));
-              cleanLines.push(this.getCleanMarkdown(decoded, visited));
-            } catch (_) {
-              // Silently omit corrupted fold markers
-            }
+              content = decodeURIComponent(escape(atob(id)));
+            } catch (_) {}
           }
+        }
+
+        if (content !== null && content !== undefined) {
+          cleanLines.push(this.getCleanMarkdown(content, visited));
         }
       } else {
         cleanLines.push(line);
       }
     }
     return cleanLines.join('\n');
+  }
+
+  getActiveFoldIds() {
+    const activeIds = new Set();
+    const text = this.editorEl ? this.editorEl.value : '';
+    const regex = /<!--\s*FOLD:(.*?)\s*-->/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      activeIds.add(match[1].trim());
+    }
+    // Recursively collect nested fold IDs
+    let added = true;
+    while (added) {
+      added = false;
+      for (const id of Array.from(activeIds)) {
+        if (this.editorFoldMap && this.editorFoldMap.has(id)) {
+          const content = this.editorFoldMap.get(id);
+          if (typeof content === 'string' && content.includes('<!-- FOLD:')) {
+            let innerMatch;
+            const innerRegex = /<!--\s*FOLD:(.*?)\s*-->/g;
+            while ((innerMatch = innerRegex.exec(content)) !== null) {
+              const innerId = innerMatch[1].trim();
+              if (!activeIds.has(innerId)) {
+                activeIds.add(innerId);
+                added = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    return activeIds;
+  }
+
+  pruneFoldMap() {
+    if (!this.editorFoldMap) return;
+    const activeIds = this.getActiveFoldIds();
+    for (const key of Array.from(this.editorFoldMap.keys())) {
+      if (!activeIds.has(key)) {
+        this.editorFoldMap.delete(key);
+      }
+    }
+    if (this.currentNote && this.currentNote.foldMap) {
+      for (const key of Object.keys(this.currentNote.foldMap)) {
+        if (!activeIds.has(key)) {
+          delete this.currentNote.foldMap[key];
+        }
+      }
+    }
   }
 
   saveFoldedHeadingsState() {
@@ -4421,112 +4500,214 @@ class CavemanApp {
   }
 
   foldHeading(lineIndex) {
+    if (!this.editorEl) return;
     const text = this.editorEl.value;
     const lines = text.split('\n');
-    if (lineIndex >= lines.length) return;
-    
+    if (lineIndex < 0 || lineIndex >= lines.length) return;
+
+    const headerLine = lines[lineIndex];
+    const match = headerLine.match(/^(\s*#{1,6})\s+/);
+    if (!match) return;
+    const level = match[1].trim().length;
+
+    // Check if this heading is ALREADY folded (skipping blank lines)
+    for (let checkIdx = lineIndex + 1; checkIdx < lines.length; checkIdx++) {
+      const checkLine = lines[checkIdx];
+      if (!checkLine || checkLine.trim() === '') continue;
+      const foldMatch = checkLine.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+      if (foldMatch) {
+        // Already folded! Unfold it instead of creating a nested duplicate
+        return this.unfoldHeading(lineIndex, foldMatch[1].trim());
+      }
+      break;
+    }
+
+    // Determine fold range (code-block aware)
     let foldRange = null;
     if (this.wasmEngine && this.wasmEngine.foldEngine) {
       foldRange = this.wasmEngine.foldEngine.getFoldRange(lines, lineIndex);
     }
-    
+
     if (!foldRange || !foldRange.isFoldable) {
-      const headerLine = lines[lineIndex];
-      const match = headerLine.match(/^(\s*#{1,6})\s+/);
-      const level = match ? match[1].trim().length : 0;
-      if (level === 0) return;
-      
+      let inCodeBlock = false;
       let endIndex = lineIndex + 1;
       while (endIndex < lines.length) {
         const nextLine = lines[endIndex];
-        const nextMatch = nextLine.match(/^(\s*#{1,6})\s+/);
-        const nextLevel = nextMatch ? nextMatch[1].trim().length : 0;
-        if (nextLevel > 0 && nextLevel <= level) {
-          break;
+        const trimmed = nextLine ? nextLine.trim() : '';
+        if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+          inCodeBlock = !inCodeBlock;
+          endIndex++;
+          continue;
+        }
+        if (!inCodeBlock) {
+          const nextMatch = nextLine.match(/^(\s*#{1,6})\s+/);
+          const nextLevel = nextMatch ? nextMatch[1].trim().length : 0;
+          if (nextLevel > 0 && nextLevel <= level) {
+            break;
+          }
         }
         endIndex++;
       }
       foldRange = { startIndex: lineIndex + 1, endIndex: endIndex, isFoldable: (endIndex > lineIndex + 1) };
     }
-    
+
     if (!foldRange.isFoldable) return;
     const foldLines = lines.slice(foldRange.startIndex, foldRange.endIndex);
     if (!foldLines || foldLines.length === 0) return;
-    if (foldLines[0] && typeof foldLines[0].startsWith === 'function' && foldLines[0].startsWith('<!-- FOLD:')) return;
-    
+
+    // Generate guaranteed unique fold ID that never collides across notes or sessions
+    let shortId = `f_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 9)}`;
+    while ((this.editorFoldMap && this.editorFoldMap.has(shortId)) || text.includes(`<!-- FOLD:${shortId} -->`)) {
+      shortId = `f_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 9)}`;
+    }
+
     const foldContent = foldLines.join('\n');
-    const shortId = `f_${this.foldIdCounter++}`;
     this.editorFoldMap.set(shortId, foldContent);
+    if (this.currentNote) {
+      if (!this.currentNote.foldMap) this.currentNote.foldMap = {};
+      this.currentNote.foldMap[shortId] = foldContent;
+    }
+
     const foldMarker = `<!-- FOLD:${shortId} -->`;
-    
     const newLines = [
       ...lines.slice(0, lineIndex + 1),
       foldMarker,
       ...lines.slice(foldRange.endIndex)
     ];
-    
+
     const selStart = this.editorEl.selectionStart;
     const selEnd = this.editorEl.selectionEnd;
-    
+
+    this.pushHistory();
+
     this.editorEl.value = newLines.join('\n');
-    
-    // Restore selection as best as possible
     this.editorEl.setSelectionRange(Math.min(selStart, this.editorEl.value.length), Math.min(selEnd, this.editorEl.value.length));
-    
+
     this.handleInput(true, false, false); // Save full content silently
     this.saveFoldedHeadingsState();
     this.updateLineNumbers(true);
     this.renderHighlights();
   }
 
-  unfoldHeading(lineIndex) {
+  unfoldHeading(lineIndex, foldId = null) {
+    if (!this.editorEl) return;
     const text = this.editorEl.value;
     const lines = text.split('\n');
-    if (lineIndex >= lines.length) return;
-    
-    const markerIndex = lineIndex + 1;
-    if (markerIndex >= lines.length) return;
-    
-    const markerLine = lines[markerIndex];
-    const match = markerLine.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
-    if (!match) return;
-    
-    const id = match[1].trim();
-    let decoded = '';
-    if (this.editorFoldMap && this.editorFoldMap.has(id)) {
-      decoded = this.editorFoldMap.get(id);
-    } else if (!id.startsWith('f_')) {
-      if (/^[A-Za-z0-9+/=]+$/.test(id)) {
-        try {
-          decoded = decodeURIComponent(escape(atob(id)));
-        } catch (_) {
-          return;
+    if (lines.length === 0) return;
+
+    let markerIndex = -1;
+    let resolvedId = foldId;
+
+    // 1. Locate marker by foldId if provided
+    if (resolvedId) {
+      markerIndex = lines.findIndex(l => {
+        const m = l.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+        return m && m[1].trim() === resolvedId;
+      });
+    }
+
+    // 2. Fallback: Search near lineIndex (skip empty lines)
+    if (markerIndex === -1 && typeof lineIndex === 'number' && lineIndex >= 0 && lineIndex < lines.length) {
+      for (let idx = lineIndex + 1; idx < lines.length; idx++) {
+        const l = lines[idx];
+        if (!l || l.trim() === '') continue;
+        const m = l.match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+        if (m) {
+          markerIndex = idx;
+          resolvedId = m[1].trim();
         }
-      } else {
-        return;
+        break;
       }
-    } else {
+      // Also check lineIndex itself if clicked directly
+      if (markerIndex === -1) {
+        const m = lines[lineIndex].match(/^<!--\s*FOLD:(.*?)\s*-->$/);
+        if (m) {
+          markerIndex = lineIndex;
+          resolvedId = m[1].trim();
+        }
+      }
+    }
+
+    if (markerIndex === -1 || !resolvedId) return;
+
+    // Retrieve decoded content
+    let decoded = null;
+    if (this.editorFoldMap && this.editorFoldMap.has(resolvedId)) {
+      decoded = this.editorFoldMap.get(resolvedId);
+    } else if (this.currentNote && this.currentNote.foldMap && this.currentNote.foldMap[resolvedId]) {
+      decoded = this.currentNote.foldMap[resolvedId];
+    } else if (!resolvedId.startsWith('f_') && /^[A-Za-z0-9+/=]+$/.test(resolvedId)) {
+      try {
+        decoded = decodeURIComponent(escape(atob(resolvedId)));
+      } catch (_) {}
+    }
+
+    if (decoded === null || decoded === undefined) {
+      console.warn(`[Caveman] Cannot unfold ${resolvedId}: content missing from fold map.`);
       return;
     }
-    
+
     const newLines = [
       ...lines.slice(0, markerIndex),
       ...decoded.split('\n'),
       ...lines.slice(markerIndex + 1)
     ];
-    
+
+    // Clean up the unfolded fold from editorFoldMap and currentNote.foldMap
+    if (this.editorFoldMap) this.editorFoldMap.delete(resolvedId);
+    if (this.currentNote && this.currentNote.foldMap) {
+      delete this.currentNote.foldMap[resolvedId];
+    }
+
     const selStart = this.editorEl.selectionStart;
     const selEnd = this.editorEl.selectionEnd;
-    
+
+    this.pushHistory();
+
     this.editorEl.value = newLines.join('\n');
-    
-    // Restore selection
     this.editorEl.setSelectionRange(Math.min(selStart, this.editorEl.value.length), Math.min(selEnd, this.editorEl.value.length));
-    
+
     this.handleInput(true, false, false); // Save full content silently
     this.saveFoldedHeadingsState();
     this.updateLineNumbers(true);
     this.renderHighlights();
+  }
+
+  unfoldAllHeadings() {
+    if (!this.editorEl) return;
+    const text = this.editorEl.value;
+    if (!text.includes('<!-- FOLD:')) return;
+
+    this.pushHistory();
+
+    const clean = this.getCleanMarkdown(text);
+    this.editorEl.value = clean;
+    this.editorFoldMap.clear();
+    if (this.currentNote) {
+      this.currentNote.rawContent = clean;
+      this.currentNote.content = clean;
+      this.currentNote.foldMap = {};
+    }
+
+    this.handleInput(true, false, false);
+    this.saveFoldedHeadingsState();
+    this.updateLineNumbers(true);
+    this.renderHighlights();
+  }
+
+  foldAllHeadings() {
+    if (!this.editorEl) return;
+    const text = this.editorEl.value;
+    const lines = text.split('\n');
+
+    this.pushHistory();
+    // Fold all headings from bottom to top so that earlier line indices remain stable
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (/^(\s*#{1,6})\s+/.test(line)) {
+        this.foldHeading(i);
+      }
+    }
   }
 }
 
