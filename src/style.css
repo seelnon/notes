@@ -829,6 +829,73 @@ body {
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
   caret-color: #2c241c;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+#editor::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Brutalist Editor Custom Scrollbar */
+.editor-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  z-index: 50;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.editor-scrollbar-track {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--text-primary);
+  cursor: pointer;
+}
+
+.editor-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 24px;
+  background: var(--text-primary);
+  cursor: grab;
+  touch-action: none;
+  box-sizing: border-box;
+}
+
+.editor-scrollbar-thumb:hover {
+  background: #333;
+}
+
+.editor-scrollbar-thumb.dragging {
+  cursor: grabbing !important;
+  background: #000 !important;
+}
+
+.night-mode .editor-scrollbar-track {
+  background: #1c1814;
+  border-left-color: #a18a5e;
+}
+
+.night-mode .editor-scrollbar-thumb {
+  background: #a18a5e;
+}
+
+.night-mode .editor-scrollbar-thumb:hover {
+  background: #c2aa79;
+}
+
+.night-mode .editor-scrollbar-thumb.dragging {
+  background: #e5c07b !important;
 }
 
 .night-mode #editor {

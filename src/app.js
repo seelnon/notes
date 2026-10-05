@@ -83,11 +83,16 @@ class CavemanApp {
     this.searchMarksEl = document.getElementById('search-marks');
     this.editorColorWidgets = document.getElementById('editor-color-widgets');
     this.editorSketchWidgets = document.getElementById('editor-sketch-widgets');
+    this.editorScrollbar = document.getElementById('editor-scrollbar');
+    this.editorScrollbarTrack = document.getElementById('editor-scrollbar-track');
+    this.editorScrollbarThumb = document.getElementById('editor-scrollbar-thumb');
+    this._isScrollbarDragging = false;
     this.colorPicker = new ColorPicker();
     this.sketchManager = new SketchManager(this);
     this.wasmEngine = wasmEngine;
 
     this.initLazyLoader();
+    this.initCustomScrollbar();
     this.init();
   }
 
@@ -118,6 +123,118 @@ class CavemanApp {
       imgEl.src = dataUrl;
       imgEl.classList.remove('lazy-vault-img');
     }
+  }
+
+  initCustomScrollbar() {
+    if (!this.editorScrollbarThumb || !this.editorScrollbarTrack) return;
+
+    let isDragging = false;
+    let startY = 0;
+    let startScrollTop = 0;
+
+    const onPointerMove = (e) => {
+      if (!isDragging) return;
+      const clientH = this.editorEl.clientHeight;
+      const scrollH = this.editorEl.scrollHeight;
+      const maxScroll = Math.max(0, scrollH - clientH);
+      if (maxScroll <= 0) return;
+
+      const trackH = this.editorScrollbarTrack.clientHeight || clientH;
+      const thumbH = Math.max(24, Math.round((clientH / scrollH) * trackH));
+      const availTrack = Math.max(1, trackH - thumbH);
+
+      const deltaY = e.clientY - startY;
+      const scrollDelta = (deltaY / availTrack) * maxScroll;
+      const targetScroll = Math.max(0, Math.min(maxScroll, Math.round(startScrollTop + scrollDelta)));
+
+      if (this._scrollAnimRaf) {
+        cancelAnimationFrame(this._scrollAnimRaf);
+        this._scrollAnimRaf = null;
+      }
+      this._targetScrollTop = targetScroll;
+      this.editorEl.scrollTop = targetScroll;
+      this.syncAllEditorScrolls();
+      this.updateLineNumbers(false);
+      this.renderVisibleHighlights();
+    };
+
+    const onPointerUp = (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      this._isScrollbarDragging = false;
+      this.editorScrollbarThumb.classList.remove('dragging');
+      try {
+        if (typeof this.editorScrollbarThumb.releasePointerCapture === 'function') {
+          this.editorScrollbarThumb.releasePointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    this.editorScrollbarThumb.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isDragging = true;
+      this._isScrollbarDragging = true;
+      startY = e.clientY;
+      startScrollTop = this.editorEl.scrollTop;
+      this.editorScrollbarThumb.classList.add('dragging');
+      try {
+        if (typeof this.editorScrollbarThumb.setPointerCapture === 'function') {
+          this.editorScrollbarThumb.setPointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+    });
+
+    this.editorScrollbarTrack.addEventListener('pointerdown', (e) => {
+      if (e.target === this.editorScrollbarThumb) return;
+      const rect = this.editorScrollbarTrack.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      const clientH = this.editorEl.clientHeight;
+      const scrollH = this.editorEl.scrollHeight;
+      const maxScroll = Math.max(0, scrollH - clientH);
+      if (maxScroll <= 0) return;
+
+      const trackH = rect.height;
+      const thumbH = Math.max(24, Math.round((clientH / scrollH) * trackH));
+      const availTrack = Math.max(1, trackH - thumbH);
+      const targetThumbTop = Math.max(0, Math.min(availTrack, clickY - thumbH / 2));
+      const targetScroll = Math.round((targetThumbTop / availTrack) * maxScroll);
+
+      if (this._scrollAnimRaf) {
+        cancelAnimationFrame(this._scrollAnimRaf);
+        this._scrollAnimRaf = null;
+      }
+      this._targetScrollTop = targetScroll;
+      this.editorEl.scrollTop = targetScroll;
+      this.syncAllEditorScrolls();
+      this.updateLineNumbers(false);
+      this.renderVisibleHighlights();
+    });
+  }
+
+  updateCustomScrollbar() {
+    if (!this.editorScrollbarThumb || !this.editorScrollbarTrack || !this.editorEl) return;
+    const clientH = this.editorEl.clientHeight;
+    const scrollH = this.editorEl.scrollHeight;
+    if (scrollH <= clientH || clientH <= 0) {
+      this.editorScrollbarThumb.style.display = 'none';
+      return;
+    }
+    this.editorScrollbarThumb.style.display = 'block';
+    const trackH = this.editorScrollbarTrack.clientHeight || clientH;
+    const thumbH = Math.max(24, Math.round((clientH / scrollH) * trackH));
+    const availTrack = Math.max(1, trackH - thumbH);
+    const maxScroll = Math.max(1, scrollH - clientH);
+    const currScroll = Math.max(0, Math.min(maxScroll, this.editorEl.scrollTop));
+    const top = Math.round((currScroll / maxScroll) * availTrack);
+    this.editorScrollbarThumb.style.height = `${thumbH}px`;
+    this.editorScrollbarThumb.style.transform = `translateY(${top}px)`;
   }
 
   async init() {
@@ -382,7 +499,14 @@ class CavemanApp {
     };
 
     this.editorEl.addEventListener('scroll', () => {
-      if (!this._scrollAnimRaf) {
+      if (this._isScrollbarDragging) {
+        if (this._scrollAnimRaf) {
+          cancelAnimationFrame(this._scrollAnimRaf);
+          this._scrollAnimRaf = null;
+        }
+        this._targetScrollTop = this.editorEl.scrollTop;
+        this._targetScrollLeft = this.editorEl.scrollLeft;
+      } else if (!this._scrollAnimRaf) {
         this._targetScrollTop = this.editorEl.scrollTop;
         this._targetScrollLeft = this.editorEl.scrollLeft;
       }
@@ -392,7 +516,7 @@ class CavemanApp {
 
     if (this.editorWrapper) {
       this.editorWrapper.addEventListener('wheel', (e) => {
-        if (!this.editorEl || this.viewMode !== 'editor') return;
+        if (!this.editorEl || this.viewMode !== 'editor' || this._isScrollbarDragging) return;
 
         let deltaY = e.deltaY;
         let deltaX = e.deltaX;
@@ -1598,20 +1722,7 @@ class CavemanApp {
       noteContent = res.text;
     }
 
-    // Lazy loading for large files (150k+ chars / thousands of lines)
-    const linesArr = noteContent.split('\n');
-    if (linesArr.length > 1000) {
-      this.editorEl.value = linesArr.slice(0, 1000).join('\n');
-      setTimeout(() => {
-        if (this.currentNote === note) {
-          this.editorEl.value = noteContent;
-          this.renderHighlights();
-          this.updateLineNumbers(true);
-        }
-      }, 50);
-    } else {
-      this.editorEl.value = noteContent;
-    }
+    this.editorEl.value = noteContent;
     
     this.editorFoldMap.clear();
     this.foldIdCounter = 1;
@@ -2646,18 +2757,17 @@ class CavemanApp {
     }
     const top = this.editorEl.scrollTop;
     const left = this.editorEl.scrollLeft;
-    const scrollbarWidth = Math.max(0, this.editorEl.offsetWidth - this.editorEl.clientWidth);
 
     if (this.lineNumbersEl) this.lineNumbersEl.scrollTop = top;
     if (this.editorHighlightsEl) {
       this.editorHighlightsEl.scrollTop = top;
       this.editorHighlightsEl.scrollLeft = left;
-      this.editorHighlightsEl.style.right = scrollbarWidth + 'px';
+      this.editorHighlightsEl.style.right = '12px';
     }
     if (this.searchMarksEl) {
       this.searchMarksEl.scrollTop = top;
       this.searchMarksEl.scrollLeft = left;
-      this.searchMarksEl.style.right = scrollbarWidth + 'px';
+      this.searchMarksEl.style.right = '12px';
     }
     if (this.editorColorWidgets) {
       this.editorColorWidgets.scrollTop = top;
@@ -2666,6 +2776,7 @@ class CavemanApp {
     if (this.editorSketchWidgets && this.sketchManager) {
       this.sketchManager.syncScroll(top, left);
     }
+    this.updateCustomScrollbar();
   }
 
   openColorPickerForMacro(targetLineIdx, anchorBtn, initialHex = '') {
@@ -2758,9 +2869,26 @@ class CavemanApp {
   }
 
   onEditorScroll() {
+    this.syncAllEditorScrolls();
+    const currTop = this.editorEl ? this.editorEl.scrollTop : 0;
+    const delta = Math.abs(currTop - (this._lastScrollRenderTop || 0));
+
+    // If large jump (e.g. scrollbar dragged fast or page scrolled > 800px), render synchronously to prevent blank frame
+    if (delta > 800) {
+      if (this._scrollRenderRaf) {
+        cancelAnimationFrame(this._scrollRenderRaf);
+        this._scrollRenderRaf = null;
+      }
+      this._lastScrollRenderTop = currTop;
+      this.updateLineNumbers(false);
+      this.renderVisibleHighlights();
+      return;
+    }
+
     if (this._scrollRenderRaf) return;
     this._scrollRenderRaf = requestAnimationFrame(() => {
       this._scrollRenderRaf = null;
+      this._lastScrollRenderTop = this.editorEl ? this.editorEl.scrollTop : 0;
       this.updateLineNumbers(false);
       this.renderVisibleHighlights();
     });
@@ -2771,33 +2899,45 @@ class CavemanApp {
     const totalLines = this.cachedHighlightedLines.length;
     const scrollTop = this.editorEl ? Math.max(0, this.editorEl.scrollTop) : 0;
     const clientHeight = this.editorEl ? this.editorEl.clientHeight : 800;
+
+    // Ensure line metrics are always fully updated and in sync with totalLines
+    if (!this._gutterLineTops || !this._gutterLineHeights || this._gutterLineTops.length !== totalLines + 1) {
+      this.updateLineNumbers(true);
+    }
+
     const lineTops = this._gutterLineTops;
     const lineHeights = this._gutterLineHeights;
     const highlightedLines = this.cachedHighlightedLines;
 
     if (!lineTops || !lineHeights || lineTops.length !== totalLines + 1) {
-      this.editorHighlightsEl.innerHTML = `<div style="position: relative; height: ${totalLines * 24}px; width: 100%;">${highlightedLines.join('\n')}</div>`;
       return;
     }
 
+    // Binary search for visible start line
+    let low = 0;
+    let high = totalLines - 1;
     let startLine = 0;
-    if (scrollTop > 0) {
-      while (startLine < totalLines - 1 && lineTops[startLine + 1] < scrollTop) {
-        startLine++;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (lineTops[mid + 1] <= scrollTop) {
+        startLine = mid + 1;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
     }
+    startLine = Math.min(startLine, totalLines - 1);
+
     let endLine = startLine;
-    while (endLine < totalLines && lineTops[endLine] < scrollTop + clientHeight) {
+    const viewBottom = scrollTop + clientHeight;
+    while (endLine < totalLines && lineTops[endLine] < viewBottom) {
       endLine++;
     }
 
-    startLine = Math.max(0, startLine - 35);
-    endLine = Math.min(totalLines, endLine + 35);
-
-    if (scrollTop + clientHeight >= (lineTops[totalLines] || 0) - 300 || endLine >= totalLines - 25) {
-      endLine = totalLines;
-      startLine = Math.max(0, Math.min(startLine, totalLines - 80));
-    }
+    // Generous overscan buffer (60 lines above, 60 lines below) so fast scrolling never reveals blank space
+    const OVERSCAN = 60;
+    startLine = Math.max(0, startLine - OVERSCAN);
+    endLine = Math.min(totalLines, endLine + OVERSCAN);
 
     let rowsHtml = '';
     for (let i = startLine; i < endLine; i++) {
@@ -2808,7 +2948,6 @@ class CavemanApp {
     }
 
     const totalHeight = this._gutterTotalHeight || (lineTops[totalLines] || totalLines * 24);
-    this.editorHighlightsEl.style.paddingTop = '0px';
     this.editorHighlightsEl.innerHTML = `<div class="editor-highlights-virtual-container" style="position: relative; height: ${totalHeight}px; width: 100%; min-height: 100%;">${rowsHtml}</div>`;
   }
 
@@ -3017,26 +3156,24 @@ class CavemanApp {
 
         this.cachedLines[changedIdx] = newLines[changedIdx];
         this.cachedHighlightedLines[changedIdx] = this.formatSingleLine(newLines[changedIdx], changedIdx, inCodeBlock, codeBlockLang);
-        
-        if (!this._fastHighlightRaf) {
-          this._fastHighlightRaf = requestAnimationFrame(() => {
-            this._fastHighlightRaf = null;
-            if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-              this.renderVisibleHighlights();
-            }
-          });
-        }
+        this.renderVisibleHighlights();
       }
     } else if (newLength === oldLength + 1) {
       // 2. User pressed Enter (line added)
       let splitIdx = -1;
-      for (let i = 0; i < oldLength; i++) {
-        if (newLines[i] !== this.cachedLines[i]) {
-          splitIdx = i;
-          break;
+      const expectedSplit = Math.max(0, Math.min(oldLength - 1, cursorLineIdx - 1));
+      if (newLines[expectedSplit] !== this.cachedLines[expectedSplit] ||
+          (expectedSplit + 1 < newLength && newLines[expectedSplit + 1] !== this.cachedLines[expectedSplit])) {
+        splitIdx = expectedSplit;
+      } else {
+        for (let i = 0; i < oldLength; i++) {
+          if (newLines[i] !== this.cachedLines[i]) {
+            splitIdx = i;
+            break;
+          }
         }
       }
-      if (splitIdx === -1) splitIdx = Math.max(0, cursorLineIdx - 1);
+      if (splitIdx === -1) splitIdx = expectedSplit;
 
       const line1 = newLines[splitIdx];
       const line2 = newLines[splitIdx + 1];
@@ -3045,7 +3182,7 @@ class CavemanApp {
       if (line1.includes('```') || line2.includes('```') || (this.cachedLines[splitIdx] && this.cachedLines[splitIdx].includes('```')) ||
           line1.includes('color') || line2.includes('color') || (this.cachedLines[splitIdx] && this.cachedLines[splitIdx].includes('color'))) {
         this.renderHighlightsImmediate();
-        this.requestFastLineNumbers(true);
+        this.updateLineNumbers(true);
         return;
       }
 
@@ -3071,25 +3208,23 @@ class CavemanApp {
         this.cachedCodeBlockLangs.splice(splitIdx, 1, splitLang, splitLang);
       }
       
-      if (!this._fastHighlightRaf) {
-        this._fastHighlightRaf = requestAnimationFrame(() => {
-          this._fastHighlightRaf = null;
-          if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-            this.renderVisibleHighlights();
-          }
-        });
-      }
-      this.requestFastLineNumbers(true);
+      this.updateLineNumbers(true);
+      this.renderVisibleHighlights();
     } else if (newLength === oldLength - 1) {
       // 3. User pressed Backspace/Delete (line merged)
       let mergeIdx = -1;
-      for (let i = 0; i < newLength; i++) {
-        if (newLines[i] !== this.cachedLines[i]) {
-          mergeIdx = i;
-          break;
+      const expectedMerge = Math.max(0, Math.min(newLength - 1, cursorLineIdx));
+      if (expectedMerge < newLength && expectedMerge < oldLength && newLines[expectedMerge] !== this.cachedLines[expectedMerge]) {
+        mergeIdx = expectedMerge;
+      } else {
+        for (let i = 0; i < newLength; i++) {
+          if (newLines[i] !== this.cachedLines[i]) {
+            mergeIdx = i;
+            break;
+          }
         }
       }
-      if (mergeIdx === -1) mergeIdx = cursorLineIdx;
+      if (mergeIdx === -1) mergeIdx = expectedMerge;
 
       const mergedLine = newLines[mergeIdx];
       if (mergedLine.includes('```') || 
@@ -3099,7 +3234,7 @@ class CavemanApp {
           (this.cachedLines[mergeIdx] && this.cachedLines[mergeIdx].includes('color')) || 
           (this.cachedLines[mergeIdx + 1] && this.cachedLines[mergeIdx + 1].includes('color'))) {
         this.renderHighlightsImmediate();
-        this.requestFastLineNumbers(true);
+        this.updateLineNumbers(true);
         return;
       }
 
@@ -3123,15 +3258,8 @@ class CavemanApp {
         this.cachedCodeBlockLangs.splice(mergeIdx, 2, mergeLang);
       }
       
-      if (!this._fastHighlightRaf) {
-        this._fastHighlightRaf = requestAnimationFrame(() => {
-          this._fastHighlightRaf = null;
-          if (this.cachedHighlightedLines && this.editorHighlightsEl) {
-            this.renderVisibleHighlights();
-          }
-        });
-      }
-      this.requestFastLineNumbers(true);
+      this.updateLineNumbers(true);
+      this.renderVisibleHighlights();
     } else {
       // 4. Large paste or multi-line edit
       this.renderHighlightsImmediate();
@@ -3934,25 +4062,31 @@ class CavemanApp {
     const headingLevels = this._gutterHeadingLevels;
     const cachedLines = this._gutterLines || lines;
 
-    // Fast search for visible start line
+    // Fast binary search for visible start line
+    let low = 0;
+    let high = totalLines - 1;
     let startLine = 0;
-    while (startLine < totalLines - 1 && lineTops[startLine + 1] < scrollTop) {
-      startLine++;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (lineTops[mid + 1] <= scrollTop) {
+        startLine = mid + 1;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
     }
+    startLine = Math.min(startLine, totalLines - 1);
+
     let endLine = startLine;
-    while (endLine < totalLines && lineTops[endLine] < scrollTop + clientHeight) {
+    const viewBottom = scrollTop + clientHeight;
+    while (endLine < totalLines && lineTops[endLine] < viewBottom) {
       endLine++;
     }
 
-    // Add buffer of 35 lines above and below for smooth scrolling
-    startLine = Math.max(0, startLine - 35);
-    endLine = Math.min(totalLines, endLine + 35);
-
-    // CRITICAL: If scrolled near the bottom, ALWAYS include all the way to totalLines
-    if (scrollTop + clientHeight >= (lineTops[totalLines] || 0) - 300 || endLine >= totalLines - 25) {
-      endLine = totalLines;
-      startLine = Math.max(0, Math.min(startLine, totalLines - 80));
-    }
+    // Generous overscan buffer (60 lines above, 60 lines below) matching renderVisibleHighlights
+    const OVERSCAN = 60;
+    startLine = Math.max(0, startLine - OVERSCAN);
+    endLine = Math.min(totalLines, endLine + OVERSCAN);
 
     // Fast exit if visible range & metrics have not changed
     if (!force && 

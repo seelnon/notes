@@ -233,6 +233,16 @@ body.night-mode input[type="checkbox"]:checked::after, body.night-mode #preview 
 }
 
 /* Night Mode Scrollbars */
+body.night-mode #editor {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+body.night-mode #editor::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
 body.night-mode ::-webkit-scrollbar-track {
   background: #1c1814;
 }
