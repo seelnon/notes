@@ -362,3 +362,34 @@ body.night-mode #preview a.wikilink:hover {
   color: #1a1612 !important;
 }
 
+/* Night Mode Context Menu */
+body.night-mode .brutalist-context-menu {
+  background: #14110e;
+  border-color: #a18a5e;
+  box-shadow: 4px 4px 0 #a18a5e;
+}
+
+body.night-mode .brutalist-context-header {
+  border-bottom: 1px dashed rgba(161, 138, 94, 0.25);
+  color: #a18a5e;
+}
+
+body.night-mode .brutalist-context-item {
+  color: #a18a5e;
+}
+
+body.night-mode .brutalist-context-item:hover {
+  background: #a18a5e;
+  color: #14110e;
+}
+
+body.night-mode .brutalist-context-item.danger {
+  color: #ff5555;
+}
+
+body.night-mode .brutalist-context-item.danger:hover {
+  background: #ff5555;
+  color: #14110e;
+}
+
+

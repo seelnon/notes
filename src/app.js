@@ -27,6 +27,8 @@ class CavemanApp {
     this.titleInput = document.getElementById('note-title');
     this.folderInput = document.getElementById('note-folder');
     this.newNoteBtn = document.getElementById('new-note');
+    this.newFolderBtn = document.getElementById('new-folder-btn');
+    this.sidebarEl = document.getElementById('sidebar');
     this.togglePreviewBtn = document.getElementById('toggle-preview');
     this.canvasModeBtn = document.getElementById('canvas-mode-btn');
     this.unfoldAllBtn = document.getElementById('unfold-all-btn');
@@ -49,6 +51,8 @@ class CavemanApp {
     this.statusResizer = document.getElementById('status-resizer');
     this.closeOverlayBtns = document.querySelectorAll('.close-overlay');
     this.collapsedFolders = JSON.parse(localStorage.getItem('caveman-collapsed-folders') || '[]');
+    this.customFolders = JSON.parse(localStorage.getItem('caveman-custom-folders') || '[]');
+    this.activeContextMenu = null;
     this.imageCache = new Map(); // Memory cache to prevent flash
     this.historyStack = new Map(); // noteId -> { undo: [], redo: [] }
     this.historyTimer = null;
@@ -95,6 +99,14 @@ class CavemanApp {
     this.initLazyLoader();
     this.initCustomScrollbar();
     this.init();
+
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => {
+        this.cachedCharWidth = null;
+        this.cachedLineHeight = null;
+        this.handleEditorResize();
+      });
+    }
   }
 
   initLazyLoader() {
@@ -320,12 +332,39 @@ class CavemanApp {
     });
 
     window.addEventListener('mousedown', (e) => {
+      if (this.activeContextMenu && !this.activeContextMenu.contains(e.target)) {
+        this.closeContextMenu();
+      }
       if (this.activePopover && !this.activePopover.contains(e.target)) {
         this.activePopover.remove();
         this.activePopover = null;
         this.renderNoteList(); 
       }
     });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (this.activeContextMenu) {
+          this.closeContextMenu();
+        }
+      }
+    });
+
+    if (this.sidebarEl) {
+      this.sidebarEl.addEventListener('contextmenu', (e) => {
+        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+          return;
+        }
+        this.openContextMenu(e);
+      });
+    }
+
+    if (this.newFolderBtn) {
+      this.newFolderBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.createNewFolder('');
+      });
+    }
 
     if (this.dblClickRenameCheck) {
       this.dblClickRenameCheck.addEventListener('change', () => {
@@ -550,14 +589,21 @@ class CavemanApp {
       }, { passive: false });
     }
     window.addEventListener('resize', () => {
-      this.cachedCharWidth = null;
-      this.cachedLineHeight = null;
-      this._gutterLineTops = null;
-      this._lastGutterStart = null;
-      this._lastGutterEnd = null;
-      this.updateLineNumbers(true);
-      this.renderHighlights();
+      this.handleEditorResize();
     });
+
+    if (typeof ResizeObserver !== 'undefined' && this.editorEl) {
+      this._editorResizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const newWidth = Math.round(entry.contentRect.width);
+          if (this._lastObservedEditorWidth !== undefined && this._lastObservedEditorWidth !== newWidth) {
+            this.handleEditorResize();
+          }
+          this._lastObservedEditorWidth = newWidth;
+        }
+      });
+      this._editorResizeObserver.observe(this.editorEl);
+    }
     this.editorEl.addEventListener('click', (e) => {
       this.preventCaretInSketchSpacers();
       // 1. Direct hit-test for actual swatch or color box element ONLY
@@ -911,8 +957,7 @@ class CavemanApp {
     });
 
     window.addEventListener('resize', () => {
-      this.updateLineNumbers();
-      this.renderHighlights();
+      this.handleEditorResize();
     });
 
     this.previewEl.addEventListener('click', (e) => this.handlePreviewClick(e));
@@ -1143,6 +1188,31 @@ class CavemanApp {
       return;
     }
 
+    if (this.customFolders) {
+      this.customFolders = this.customFolders.map(f => {
+        if (f === oldFolderPath) return newFolderPath;
+        if (f.startsWith(oldFolderPath + '/')) return newFolderPath + f.slice(oldFolderPath.length);
+        return f;
+      });
+      this.customFolders = [...new Set(this.customFolders)];
+      localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
+    }
+
+    if (this.collapsedFolders) {
+      this.collapsedFolders = this.collapsedFolders.map(f => {
+        if (f === oldFolderPath) return newFolderPath;
+        if (f.startsWith(oldFolderPath + '/')) return newFolderPath + f.slice(oldFolderPath.length);
+        return f;
+      });
+      localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+    }
+
+    if (this.folderSettings && this.folderSettings[oldFolderPath]) {
+      this.folderSettings[newFolderPath] = this.folderSettings[oldFolderPath];
+      delete this.folderSettings[oldFolderPath];
+      this.saveFolderSettings();
+    }
+
     const updates = this.notes
       .filter(note => !note.isPublic)
       .filter(note => {
@@ -1172,6 +1242,365 @@ class CavemanApp {
     if (this.currentNote) {
        this.folderInput.value = this.currentNote.folder || '';
     }
+  }
+
+  async deleteFolder(folderPath) {
+    if (!folderPath) return;
+
+    if (this.customFolders) {
+      this.customFolders = this.customFolders.filter(f => f !== folderPath && !f.startsWith(folderPath + '/'));
+      localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
+    }
+
+    if (this.collapsedFolders) {
+      this.collapsedFolders = this.collapsedFolders.filter(f => f !== folderPath && !f.startsWith(folderPath + '/'));
+      localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+    }
+
+    if (this.folderSettings) {
+      delete this.folderSettings[folderPath];
+      this.saveFolderSettings();
+    }
+
+    // Move any notes inside this folder to parent folder or root
+    const parentFolder = folderPath.includes('/') ? folderPath.substring(0, folderPath.lastIndexOf('/')) : '';
+    const notesInFolder = this.notes.filter(note => !note.isPublic && ((note.folder || '').toUpperCase() === folderPath || (note.folder || '').toUpperCase().startsWith(folderPath + '/')));
+
+    for (const note of notesInFolder) {
+      note.folder = parentFolder;
+      note.updatedAt = Date.now();
+      await this.vault.saveNote(note);
+    }
+
+    if (this.currentNote && (this.currentNote.folder || '').toUpperCase().startsWith(folderPath)) {
+      this.currentNote.folder = parentFolder;
+      this.folderInput.value = parentFolder;
+    }
+
+    this.statusMessenger(`Folder deleted.`, "info");
+    await this.loadNotes();
+  }
+
+  createNewFolder(parentPath = '') {
+    let baseName = 'NEW_FOLDER';
+    let candidateName = baseName;
+    let counter = 1;
+
+    const existingUpper = new Set([
+      ...(this.customFolders || []).map(f => f.toUpperCase()),
+      ...this.notes.map(n => (n.folder || '').toUpperCase())
+    ]);
+
+    let fullPath = parentPath ? `${parentPath}/${candidateName}`.toUpperCase() : candidateName;
+    while (existingUpper.has(fullPath)) {
+      candidateName = `${baseName}_${counter++}`;
+      fullPath = parentPath ? `${parentPath}/${candidateName}`.toUpperCase() : candidateName;
+    }
+
+    if (!this.customFolders) this.customFolders = [];
+    if (!this.customFolders.includes(fullPath)) {
+      this.customFolders.push(fullPath);
+      localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
+    }
+
+    // Uncollapse parent folders so the new folder is visible
+    if (parentPath) {
+      const parts = parentPath.split('/');
+      let acc = '';
+      parts.forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        this.collapsedFolders = this.collapsedFolders.filter(f => f !== acc);
+      });
+      localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+    }
+
+    this.renamingFolder = fullPath;
+    this.renderNoteList();
+  }
+
+  async createNewNoteInFolder(folderPath = '') {
+    await this.handleInput(false, false, true);
+    const note = {
+      title: '',
+      folder: folderPath,
+      content: '',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    note._searchIndex = `${note.folder}  `.toLowerCase();
+    const id = await this.vault.saveNote(note);
+    note.id = id;
+    this.notes.push(note);
+
+    if (folderPath) {
+      const parts = folderPath.split('/');
+      let acc = '';
+      parts.forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        this.collapsedFolders = this.collapsedFolders.filter(f => f !== acc);
+      });
+      localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+    }
+
+    await this.selectNote(note);
+    if (this.viewMode === 'editor') {
+      this.updateLineNumbers();
+    }
+    this.titleInput.focus();
+  }
+
+  async duplicateNote(note) {
+    if (!note) return;
+    const dupTitle = note.title ? `${note.title} (COPY)` : 'Untitled (COPY)';
+    const dup = {
+      title: dupTitle,
+      folder: note.folder || '',
+      content: note.content || '',
+      rawContent: note.rawContent || note.content || '',
+      sketches: note.sketches ? JSON.parse(JSON.stringify(note.sketches)) : {},
+      foldMap: note.foldMap ? JSON.parse(JSON.stringify(note.foldMap)) : {},
+      canvasData: note.canvasData ? JSON.parse(JSON.stringify(note.canvasData)) : null,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    dup._searchIndex = `${dup.folder} ${dup.title} ${dup.content}`.toLowerCase();
+    const id = await this.vault.saveNote(dup);
+    dup.id = id;
+    this.notes.push(dup);
+    await this.selectNote(dup);
+  }
+
+  createContextHeader(text) {
+    const header = document.createElement('div');
+    header.className = 'brutalist-context-header';
+    header.textContent = text;
+    return header;
+  }
+
+  closeContextMenu() {
+    if (this.activeContextMenu) {
+      this.activeContextMenu.remove();
+      this.activeContextMenu = null;
+    }
+  }
+
+  collectAllFolderPaths(out = []) {
+    const set = new Set();
+    (this.customFolders || []).forEach(f => {
+      const parts = f.split('/');
+      let acc = '';
+      parts.forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        set.add(acc);
+      });
+    });
+    this.notes.forEach(n => {
+      if (!n.folder) return;
+      const parts = n.folder.toUpperCase().split('/');
+      let acc = '';
+      parts.forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        set.add(acc);
+      });
+    });
+    set.forEach(p => out.push(p));
+    return out;
+  }
+
+  openContextMenu(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    this.closeContextMenu();
+    if (this.activePopover) {
+      this.activePopover.remove();
+      this.activePopover = null;
+    }
+
+    const folderEl = e.target.closest('.sidebar-folder-label');
+    const noteEl = e.target.closest('.note-item');
+
+    let contextType = 'root';
+    let targetFolder = '';
+    let targetNote = null;
+
+    if (folderEl && folderEl.dataset.folderPath) {
+      contextType = 'folder';
+      targetFolder = folderEl.dataset.folderPath;
+    } else if (noteEl && noteEl.dataset.noteId) {
+      contextType = 'note';
+      targetNote = this.notes.find(n => n.id.toString() === noteEl.dataset.noteId.toString());
+      if (targetNote) {
+        targetFolder = targetNote.folder || '';
+      }
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'brutalist-context-menu';
+
+    const items = [];
+
+    if (contextType === 'folder') {
+      const folderName = targetFolder.split('/').pop();
+      menu.appendChild(this.createContextHeader(`FOLDER: ${folderName}`));
+
+      items.push({
+        label: '+ Create Document',
+        icon: '📄',
+        action: () => this.createNewNoteInFolder(targetFolder)
+      });
+      items.push({
+        label: '+ Create Folder',
+        icon: '📁',
+        action: () => this.createNewFolder(targetFolder)
+      });
+      items.push({
+        label: 'Rename Folder',
+        icon: '✎',
+        action: () => {
+          this.renamingFolder = targetFolder;
+          this.renderNoteList();
+        }
+      });
+      items.push({
+        label: 'Folder Icon & Tint',
+        icon: '🎨',
+        action: () => {
+          this.openFolderSettings(targetFolder, folderEl);
+        }
+      });
+      const isCol = this.collapsedFolders.includes(targetFolder);
+      items.push({
+        label: isCol ? 'Expand Folder' : 'Collapse Folder',
+        icon: isCol ? '▼' : '▶',
+        action: () => this.toggleFolder(targetFolder)
+      });
+      items.push({
+        label: 'Delete Folder',
+        icon: '✕',
+        danger: true,
+        action: () => this.deleteFolder(targetFolder)
+      });
+
+    } else if (contextType === 'note') {
+      const noteTitle = (targetNote && targetNote.title) ? targetNote.title : 'Untitled';
+      menu.appendChild(this.createContextHeader(`DOC: ${noteTitle}`));
+
+      items.push({
+        label: '+ Create Document',
+        icon: '📄',
+        action: () => this.createNewNoteInFolder(targetFolder)
+      });
+      items.push({
+        label: '+ Create Folder',
+        icon: '📁',
+        action: () => this.createNewFolder(targetFolder)
+      });
+      if (targetNote && !targetNote.isPublic) {
+        items.push({
+          label: 'Rename Document',
+          icon: '✎',
+          action: () => {
+            this.renamingNoteId = targetNote.id;
+            this.renderNoteList();
+          }
+        });
+        items.push({
+          label: 'Duplicate Document',
+          icon: '⧉',
+          action: () => this.duplicateNote(targetNote)
+        });
+        items.push({
+          label: 'Delete Document',
+          icon: '✕',
+          danger: true,
+          action: async () => {
+            await this.vault.deleteNote(targetNote.id);
+            await this.loadNotes();
+            if (this.currentNote && this.currentNote.id === targetNote.id) {
+              if (this.notes.length > 0) this.selectNote(this.notes[0]);
+              else this.createNewNote();
+            }
+          }
+        });
+      }
+    } else {
+      // Root sidebar / empty space context
+      menu.appendChild(this.createContextHeader('PROJECT EXPLORER'));
+
+      items.push({
+        label: '+ Create Document',
+        icon: '📄',
+        action: () => this.createNewNoteInFolder('')
+      });
+      items.push({
+        label: '+ Create Folder',
+        icon: '📁',
+        action: () => this.createNewFolder('')
+      });
+      items.push({
+        label: 'Expand All Folders',
+        icon: '▼',
+        action: () => {
+          this.collapsedFolders = [];
+          localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+          this.renderNoteList();
+        }
+      });
+      items.push({
+        label: 'Collapse All Folders',
+        icon: '▶',
+        action: () => {
+          const allFolderPaths = [];
+          this.collectAllFolderPaths(allFolderPaths);
+          this.collapsedFolders = allFolderPaths;
+          localStorage.setItem('caveman-collapsed-folders', JSON.stringify(this.collapsedFolders));
+          this.renderNoteList();
+        }
+      });
+    }
+
+    items.forEach(item => {
+      const btn = document.createElement('div');
+      btn.className = `brutalist-context-item ${item.danger ? 'danger' : ''}`;
+
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'context-item-icon';
+      iconSpan.textContent = item.icon || '';
+      btn.appendChild(iconSpan);
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'context-item-label';
+      labelSpan.textContent = item.label;
+      btn.appendChild(labelSpan);
+
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        this.closeContextMenu();
+        item.action();
+      });
+
+      menu.appendChild(btn);
+    });
+
+    document.body.appendChild(menu);
+    this.activeContextMenu = menu;
+
+    const menuRect = menu.getBoundingClientRect();
+    let posX = e.clientX;
+    let posY = e.clientY;
+
+    if (posX + menuRect.width > window.innerWidth) {
+      posX = window.innerWidth - menuRect.width - 8;
+    }
+    if (posY + menuRect.height > window.innerHeight) {
+      posY = window.innerHeight - menuRect.height - 8;
+    }
+    posX = Math.max(8, posX);
+    posY = Math.max(8, posY);
+
+    menu.style.left = `${posX}px`;
+    menu.style.top = `${posY}px`;
   }
 
   async renameNote(noteId, newTitle) {
@@ -1381,6 +1810,22 @@ class CavemanApp {
     // Build hierarchical tree
     const root = { folders: {}, notes: [] };
 
+    // 1. Populate custom/empty folders so user-created folders appear even before adding notes
+    (this.customFolders || []).forEach(folderPath => {
+      if (!folderPath) return;
+      if (query && !folderPath.toLowerCase().includes(query)) return;
+      const parts = folderPath.split('/').filter(p => p.length > 0);
+      let current = root;
+      parts.forEach(part => {
+        const key = part.toUpperCase();
+        if (!current.folders[key]) {
+          current.folders[key] = { folders: {}, notes: [], path: (current.path ? current.path + '/' : '') + key };
+        }
+        current = current.folders[key];
+      });
+    });
+
+    // 2. Populate folders and notes from notes list
     filtered.forEach(note => {
       const parts = (note.folder || '').split('/').filter(p => p.length > 0);
       let current = root;
@@ -1406,6 +1851,7 @@ class CavemanApp {
       
       const header = document.createElement('div');
       header.className = `sidebar-folder-label ${isCollapsed ? 'collapsed' : ''} ${isRenaming ? 'renaming' : ''}`;
+      header.dataset.folderPath = folder.path;
       header.style.paddingLeft = '4px'; // Almost hugging the left wall
       
       if (isRenaming) {
@@ -1436,6 +1882,16 @@ class CavemanApp {
           if (e.key === 'Enter') handleRename();
           if (e.key === 'Escape') {
             this.renamingFolder = null;
+            if (this.customFolders && this.customFolders.includes(folder.path)) {
+              const hasNotes = this.notes.some(n => {
+                const f = (n.folder || '').toUpperCase();
+                return f === folder.path || f.startsWith(folder.path + '/');
+              });
+              if (!hasNotes && (name.startsWith('NEW_FOLDER') || name === '')) {
+                this.customFolders = this.customFolders.filter(f => f !== folder.path);
+                localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
+              }
+            }
             this.renderNoteList();
           }
         };
@@ -1512,6 +1968,7 @@ class CavemanApp {
       const isRenaming = this.renamingNoteId === note.id;
       const el = document.createElement('div');
       el.className = `note-item ${this.currentNote && this.currentNote.id === note.id ? 'active' : ''} ${isRenaming ? 'renaming' : ''}`;
+      el.dataset.noteId = note.id;
       el.style.paddingLeft = `${depth > 0 ? 16 + (depth * 12) : 16}px`;
 
       if (isRenaming) {
@@ -2617,24 +3074,60 @@ class CavemanApp {
     this.graphBtn.classList.remove('active');
   }
 
+  handleEditorResize() {
+    if (!this.editorEl) return;
+
+    // Invalidate cached font and layout measurements
+    this.cachedCharWidth = null;
+    this.cachedLineHeight = null;
+    this._lastGutterText = null;
+    this.lastRenderedEditorWidth = 0;
+    this.lastRenderedHighlightWidth = 0;
+    this.lastRenderedScrollTop = -1;
+
+    // Refresh char and line height measurements
+    this.getCharWidth();
+    this.getLineHeight();
+
+    if (this.viewMode === 'editor' && this.currentNote) {
+      // 1. Force recalculation of line heights, line tops, visual wrap lines and gutter
+      this.updateLineNumbers(true);
+
+      // 2. Re-render visible highlights immediately with the updated line layout
+      this.renderVisibleHighlights();
+
+      // 3. Re-render search marks if search is active
+      if (this.editorSearchWidget && !this.editorSearchWidget.classList.contains('hidden')) {
+        this.performSearch(false);
+      }
+
+      // 4. Sync sketch blocks to new line heights and line tops
+      if (this.sketchManager) {
+        const currentLines = this.editorEl.value.split('\n');
+        this.sketchManager.syncWidgets(currentLines, this._gutterLineTops);
+        this.sketchManager.syncScroll(this.editorEl.scrollTop, this.editorEl.scrollLeft);
+      }
+
+      // 5. Sync all scroll containers & custom scrollbar
+      this.syncAllEditorScrolls();
+      this.updateCustomScrollbar();
+    } else if (this.viewMode === 'canvas') {
+      if (this.canvasModule) {
+        this.canvasModule.onResize();
+      }
+    }
+  }
+
   setZoom(size) {
     const s = parseInt(size) || 14;
     const lh = Math.round(s * 1.6);
     localStorage.setItem('caveman-zoom', size);
     document.documentElement.style.setProperty('--zoom-scale', s + 'px');
     document.documentElement.style.setProperty('--editor-line-height', lh + 'px');
-    this.cachedLineHeight = lh;
-    this.cachedCharWidth = null;
-    this._gutterLineTops = null;
-    this._lastGutterStart = null;
-    this._lastGutterEnd = null;
     document.querySelectorAll('.zoom-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.size === size);
     });
-    if (this.viewMode === 'editor') {
-      this.updateLineNumbers(true);
-      this.renderHighlights();
-    }
+    this.handleEditorResize();
   }
 
   toggleSidebar() {
@@ -2642,12 +3135,10 @@ class CavemanApp {
     if (sidebar) sidebar.classList.toggle('hidden');
     
     // Crucial: Update editor layouts after sidebar push/pull
-    if (this.viewMode === 'editor') {
-      setTimeout(() => {
-        this.updateLineNumbers();
-        this.renderHighlights();
-      }, 0);
-    }
+    this.handleEditorResize();
+    setTimeout(() => {
+      this.handleEditorResize();
+    }, 50);
   }
 
   showSearch() {
@@ -2775,12 +3266,12 @@ class CavemanApp {
     if (this.editorHighlightsEl) {
       this.editorHighlightsEl.scrollTop = top;
       this.editorHighlightsEl.scrollLeft = left;
-      this.editorHighlightsEl.style.right = '12px';
+      this.editorHighlightsEl.style.right = '0px';
     }
     if (this.searchMarksEl) {
       this.searchMarksEl.scrollTop = top;
       this.searchMarksEl.scrollLeft = left;
-      this.searchMarksEl.style.right = '12px';
+      this.searchMarksEl.style.right = '0px';
     }
     if (this.editorColorWidgets) {
       this.editorColorWidgets.scrollTop = top;
@@ -2912,9 +3403,12 @@ class CavemanApp {
     const totalLines = this.cachedHighlightedLines.length;
     const scrollTop = this.editorEl ? Math.max(0, this.editorEl.scrollTop) : 0;
     const clientHeight = this.editorEl ? this.editorEl.clientHeight : 800;
+    const currentWidth = this.editorEl ? this.editorEl.clientWidth : 0;
 
-    // Ensure line metrics are always fully updated and in sync with totalLines
-    if (!this._gutterLineTops || !this._gutterLineHeights || this._gutterLineTops.length !== totalLines + 1) {
+    // Ensure line metrics are always fully updated and in sync with totalLines and editor width
+    if (!this._gutterLineTops || !this._gutterLineHeights || 
+        this._gutterLineTops.length !== totalLines + 1 ||
+        this.lastRenderedEditorWidth !== currentWidth) {
       this.updateLineNumbers(true);
     }
 
@@ -3296,8 +3790,11 @@ class CavemanApp {
     const scrollTop = this.editorEl.scrollTop;
 
     // Fast check: if nothing changed AND scroll window hasn't shifted significantly
+    const editorWidth = this.editorEl ? this.editorEl.clientWidth : 0;
+    const widthChanged = (this.lastRenderedHighlightWidth !== undefined && this.lastRenderedHighlightWidth !== editorWidth);
     const scrollDelta = Math.abs(scrollTop - (this.lastRenderedScrollTop || 0));
-    if (text === this.lastRenderedText && 
+    if (!widthChanged &&
+        text === this.lastRenderedText && 
         query === this.lastRenderedQuery && 
         isSearchHidden === this.lastSearchWidgetHidden &&
         matchIndex === this.lastRenderedMatchIndex &&
@@ -3305,6 +3802,7 @@ class CavemanApp {
       return;
     }
 
+    this.lastRenderedHighlightWidth = editorWidth;
     this.lastRenderedText = text;
     this.lastRenderedQuery = query;
     this.lastSearchWidgetHidden = isSearchHidden;
@@ -3758,6 +4256,7 @@ class CavemanApp {
 
       zip.file("notes.json", JSON.stringify(notesToExport, null, 2));
       zip.file("folder-settings.json", JSON.stringify(this.folderSettings, null, 2));
+      zip.file("custom-folders.json", JSON.stringify(this.customFolders || [], null, 2));
       zip.file("tint-palette.json", JSON.stringify(this.tintPalette, null, 2));
       zip.file("collapsed-folders.json", JSON.stringify(this.collapsedFolders, null, 2));
       
@@ -3831,6 +4330,10 @@ class CavemanApp {
             this.folderSettings = { ...this.folderSettings, ...data.folderSettings };
             localStorage.setItem('caveman-folder-settings', JSON.stringify(this.folderSettings));
           }
+          if (data.customFolders) {
+            this.customFolders = [...new Set([...(this.customFolders || []), ...data.customFolders])];
+            localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
+          }
           if (data.tintPalette) {
             this.tintPalette = data.tintPalette;
             localStorage.setItem('caveman-tint-palette', JSON.stringify(this.tintPalette));
@@ -3868,6 +4371,13 @@ class CavemanApp {
         const settingsData = JSON.parse(await settingsFile.async("string"));
         this.folderSettings = { ...this.folderSettings, ...settingsData };
         localStorage.setItem('caveman-folder-settings', JSON.stringify(this.folderSettings));
+      }
+
+      const customFoldersFile = zip.file("custom-folders.json");
+      if (customFoldersFile) {
+        const customFoldersData = JSON.parse(await customFoldersFile.async("string"));
+        this.customFolders = [...new Set([...(this.customFolders || []), ...customFoldersData])];
+        localStorage.setItem('caveman-custom-folders', JSON.stringify(this.customFolders));
       }
 
       const paletteFile = zip.file("tint-palette.json");
@@ -3930,11 +4440,20 @@ class CavemanApp {
       span.style.fontSize = 'var(--zoom-scale, 14px)';
       span.style.fontWeight = '400';
       span.style.letterSpacing = '0px';
+      span.style.wordSpacing = '0px';
+      span.style.fontVariantLigatures = 'none';
+      span.style.fontKerning = 'none';
+      span.style.fontStretch = 'normal';
+      span.style.whiteSpace = 'pre';
+      span.style.padding = '0';
+      span.style.border = 'none';
+      span.style.margin = '0';
       span.style.position = 'absolute';
       span.style.visibility = 'hidden';
-      span.textContent = 'WWWWWWWWWWWWWWWWWWWW'; // 20 chars
+      span.style.top = '-9999px';
+      span.textContent = 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW'; // 40 chars
       document.body.appendChild(span);
-      this.cachedCharWidth = span.getBoundingClientRect().width / 20;
+      this.cachedCharWidth = span.getBoundingClientRect().width / 40;
       span.remove();
       if (!this.cachedCharWidth || isNaN(this.cachedCharWidth) || this.cachedCharWidth <= 0) this.cachedCharWidth = 8.4;
     }
@@ -3954,14 +4473,17 @@ class CavemanApp {
   }
 
   countVisualLines(text, maxChars) {
-    if (!text || text.length <= maxChars) return 1;
+    if (!text) return 1;
+    // Normalize tabs to 4 spaces to match tab-size: 4
+    const expanded = text.includes('\t') ? text.replace(/\t/g, '    ') : text;
+    if (expanded.length <= maxChars) return 1;
     let count = 0;
     let idx = 0;
-    const len = text.length;
+    const len = expanded.length;
     while (idx < len) {
       count++;
       if (idx + maxChars >= len) break;
-      let breakIdx = text.lastIndexOf(' ', idx + maxChars);
+      let breakIdx = expanded.lastIndexOf(' ', idx + maxChars);
       if (breakIdx <= idx) {
         idx += maxChars;
       } else {
